@@ -3,7 +3,6 @@ from collections import Counter
 import math
 
 # --- 1. 設定頁面配置 ---
-# layout="centered" 在手機上顯示效果通常比 wide 好，因為會集中內容
 st.set_page_config(page_title="台灣麻將計算機(手機版)", layout="centered", page_icon="🀄")
 
 # --- CSS樣式優化 (手機專用) ---
@@ -15,27 +14,29 @@ st.markdown("""
         width: 100%;
         font-size: 18px !important;
         font-weight: bold;
-        border-radius: 10px;
-        margin-bottom: 5px;
+        border-radius: 12px; /* 圓角稍微大一點 */
+        margin-bottom: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* 增加一點立體感 */
     }
     
-    /* 調整 Tabs 的字體大小 */
+    /* 調整 Tabs 的字體大小與間距 */
     button[data-baseweb="tab"] {
-        font-size: 20px !important;
+        font-size: 18px !important;
         font-weight: bold;
+        padding: 0.5rem 1rem !important; /* 讓 Tabs 在手機上不要太擠 */
     }
 
     /* 隱藏預設的 padding 讓畫面更滿 */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1rem;
         padding-bottom: 5rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 初始化 Session State (與原版相同) ---
+# --- 2. 初始化 Session State ---
 default_states = {
     'hand_tiles': [],       
     'winning_tile': None,   
@@ -52,7 +53,7 @@ for key, value in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-# --- 3. 定義牌資料 (與原版相同) ---
+# --- 3. 定義牌資料 ---
 TILES = {
     "萬": [f"{i}萬" for i in range(1, 10)],
     "筒": [f"{i}筒" for i in range(1, 10)],
@@ -61,16 +62,19 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# --- 4. 邏輯函式區域 (與原版相同) ---
+# --- 4. 邏輯函式區域 ---
 
 def add_tile(tile, category):
+    # 花牌邏輯
     if category == "花":
         if tile in st.session_state.flower_tiles:
             st.toast(f"⚠️ 花牌「{tile}」重複！", icon="🚫")
             return
         st.session_state.flower_tiles.append(tile)
+        st.toast(f"已新增花牌：{tile}", icon="🌸") # 增加回饋感
         return
 
+    # 手牌邏輯
     count_in_hand = st.session_state.hand_tiles.count(tile)
     count_in_winning = 1 if st.session_state.winning_tile == tile else 0
     
@@ -103,8 +107,7 @@ def reset_game():
     st.session_state.winning_tile = None
     st.session_state.flower_tiles = []
 
-# --- 5. 核心演算法區域 (保留原邏輯，省略重複部分以節省篇幅，功能不變) ---
-# ... (這裡直接沿用你原本的 check_seven_pairs, check_peng_peng_hu, calculate_tai) ...
+# --- 5. 核心演算法區域 (省略重複計算邏輯，與前版相同) ---
 def check_seven_pairs(counts):
     total_count = sum(counts.values())
     if total_count != 17: return False
@@ -200,12 +203,11 @@ def calculate_tai():
 
 # --- 6. UI 介面 (手機版重構) ---
 
-st.title("🀄 麻將台數計算")
+st.title("🀄 台麻計算機") # 標題縮短，避免手機換行
 
 # === 區塊 A: 狀態顯示 Dashboard ===
-# 使用 border=True 框起來，視覺比較集中
 with st.container(border=True):
-    # 1. 顯示胡的那張牌 (最重要，放上面)
+    # 1. 顯示胡的那張牌
     c_win_label, c_win_tile = st.columns([2, 1])
     with c_win_label:
         st.subheader("🖐️ 胡牌")
@@ -219,12 +221,11 @@ with st.container(border=True):
 
     st.divider()
 
-    # 2. 顯示手牌 (重點：手機要自動換行)
+    # 2. 顯示手牌
     st.subheader(f"🎴 手牌 ({len(st.session_state.hand_tiles)}/16)")
     sorted_hand = sorted(st.session_state.hand_tiles)
     
     if sorted_hand:
-        # 手機技巧：每行顯示 8 張，兩行解決
         tiles_per_row = 8 
         num_rows = math.ceil(len(sorted_hand) / tiles_per_row)
         
@@ -234,50 +235,47 @@ with st.container(border=True):
             end_idx = min(start_idx + tiles_per_row, len(sorted_hand))
             
             for i in range(start_idx, end_idx):
-                # 這裡計算 col 的索引，避免超出範圍
                 col_idx = i - start_idx
                 cols[col_idx].button(sorted_hand[i], key=f"h_{i}", disabled=True)
     else:
         st.info("尚未新增手牌")
 
-    # 3. 花牌顯示
+    # 3. 花牌顯示 (如果有的話)
     if st.session_state.flower_tiles:
         st.divider()
-        st.write(f"🌸 花牌 ({len(st.session_state.flower_tiles)})")
-        f_cols = st.columns(8) # 花牌較小，一行8個可以
+        st.write(f"🌸 花牌 ({len(st.session_state.flower_tiles)}) - 點擊移除")
+        f_cols = st.columns(8)
         for i, f in enumerate(st.session_state.flower_tiles):
             if f_cols[i % 8].button(f, key=f"f_del_{i}"):
                 remove_flower(f)
                 st.rerun()
 
-# === 區塊 B: 控制與設定 ===
+# === 區塊 B: 控制按鈕 ===
 c_ctrl1, c_ctrl2 = st.columns(2)
 with c_ctrl1:
-    if st.button("⬅️ 退回上一張", use_container_width=True):
+    if st.button("⬅️ 退回", use_container_width=True):
         remove_last_tile()
         st.rerun()
 with c_ctrl2:
-    if st.button("🗑️ 全部清空", type="primary", use_container_width=True):
+    if st.button("🗑️ 清空", type="primary", use_container_width=True):
         reset_game()
         st.rerun()
 
-# 設定摺疊區 (節省空間)
-with st.expander("⚙️ 遊戲設定 (圈風/門風/門清)", expanded=False):
-    st.caption("勾選狀態")
+# === 區塊 C: 遊戲設定 (Expander) ===
+with st.expander("⚙️ 設定 (圈風/門風/門清)", expanded=False):
     c_s1, c_s2 = st.columns(2)
     with c_s1:
         st.session_state.settings['is_self_draw'] = st.checkbox("自摸", value=st.session_state.settings['is_self_draw'])
     with c_s2:
         st.session_state.settings['is_men_qing'] = st.checkbox("門清", value=st.session_state.settings['is_men_qing'])
     
-    st.caption("風位設定")
     c_w1, c_w2 = st.columns(2)
     with c_w1:
         st.session_state.settings['wind_round'] = st.selectbox("圈風", ["東", "南", "西", "北"])
     with c_w2:
         st.session_state.settings['wind_seat'] = st.selectbox("門風", ["東", "南", "西", "北"])
 
-# === 區塊 C: 計算結果 ===
+# === 區塊 D: 計算按鈕 ===
 if st.button("🧮 計算台數", type="primary", use_container_width=True):
     valid_len = len(st.session_state.hand_tiles) == 16 and st.session_state.winning_tile is not None
     if not valid_len:
@@ -289,16 +287,16 @@ if st.button("🧮 計算台數", type="primary", use_container_width=True):
         for d in details:
             st.info(d)
 
-# === 區塊 D: 牌型鍵盤 (Tabs 優化版) ===
+# === 區塊 E: 牌型鍵盤 (5個分頁) ===
 st.markdown("---")
 st.write("👇 **點擊新增牌型**")
 
-# 使用 Tabs 分類，大幅減少垂直捲動
-tab1, tab2, tab3, tab4 = st.tabs(["🔴 萬子", "🔵 筒子", "🟢 條子", "🀄 字/花"])
+# 將分頁名稱縮短，避免在小手機上超出螢幕寬度
+tab_names = ["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"]
+tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
 
-# 定義數字牌的 3x3 網格顯示函式
+# 共用的 3x3 數字鍵盤函式
 def render_numpad(tiles, category_key):
-    # 將 1-9 分成 3x3
     for row in range(3):
         cols = st.columns(3)
         for col in range(3):
@@ -309,43 +307,44 @@ def render_numpad(tiles, category_key):
                     add_tile(tile, category_key)
                     st.rerun()
 
+# 萬、筒、條
 with tab1:
     render_numpad(TILES["萬"], "萬")
-
 with tab2:
     render_numpad(TILES["筒"], "筒")
-
 with tab3:
     render_numpad(TILES["條"], "條")
 
+# 字牌：7張 (4 + 3 排列)
 with tab4:
-    st.write("字牌")
-    # 字牌 7 張，用 4+3 排列
+    # 第一排：東南西北
     cols_z1 = st.columns(4)
     for i in range(4):
         t = TILES["字"][i]
         if cols_z1[i].button(t, key=f"z_{t}", use_container_width=True):
             add_tile(t, "字")
             st.rerun()
+    # 第二排：中發白 (使用 columns(4) 但只填前3個，保持按鈕寬度一致)
     cols_z2 = st.columns(4)
     for i in range(4, 7):
         t = TILES["字"][i]
         if cols_z2[i-4].button(t, key=f"z_{t}", use_container_width=True):
             add_tile(t, "字")
             st.rerun()
-            
-    st.divider()
-    st.write("花牌")
-    # 花牌 8 張，4x2
+
+# 花牌：8張 (4 + 4 排列)
+with tab5:
+    # 春夏秋冬
     cols_h1 = st.columns(4)
     for i in range(4):
         t = TILES["花"][i]
-        if cols_h1[i].button(t, key=f"h_{t}"):
+        if cols_h1[i].button(t, key=f"h_{t}", use_container_width=True):
             add_tile(t, "花")
             st.rerun()
+    # 梅蘭竹菊
     cols_h2 = st.columns(4)
     for i in range(4, 8):
         t = TILES["花"][i]
-        if cols_h2[i-4].button(t, key=f"h_{t}"):
+        if cols_h2[i-4].button(t, key=f"h_{t}", use_container_width=True):
             add_tile(t, "花")
             st.rerun()
