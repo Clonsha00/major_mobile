@@ -3,52 +3,46 @@ from collections import Counter
 import math
 
 # --- 1. 設定頁面配置 ---
-st.set_page_config(page_title="台灣麻將計算機(手機版)", layout="centered", page_icon="🀄")
+st.set_page_config(page_title="台灣麻將計算機(含明牌)", layout="centered", page_icon="🀄")
 
-# --- CSS樣式優化 (手機專用) ---
+# --- CSS樣式優化 ---
 st.markdown("""
 <style>
-    /* 全域按鈕樣式：加大高度，適合手指點擊 */
     div.stButton > button {
-        height: 3.5rem; 
+        height: 3.2rem; 
         width: 100%;
         font-size: 18px !important;
         font-weight: bold;
-        border-radius: 12px;
-        margin-bottom: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-radius: 10px;
+        margin-bottom: 5px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    
-    /* 調整 Tabs 的字體大小與間距 */
     button[data-baseweb="tab"] {
-        font-size: 18px !important;
+        font-size: 16px !important;
         font-weight: bold;
-        padding: 0.5rem 1rem !important;
+        padding: 0.5rem 0.5rem !important;
     }
-
-    /* 隱藏預設的 padding 讓畫面更滿 */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 5rem;
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
     }
-    
-    /* Toast 樣式 */
-    div[data-baseweb="toast"] {
-        font-size: 16px;
+    /* 強調目前選中的模式 */
+    div[data-testid="stRadio"] > label {
+        font-weight: bold;
+        font-size: 18px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. 初始化 Session State ---
 default_states = {
-    'hand_tiles': [],       
-    'winning_tile': None,   
-    'flower_tiles': [],     
+    'hand_tiles': [],       # 手牌 (暗牌)
+    'exposed_tiles': [],    # 明牌 (吃/碰/槓) -> 儲存格式: [{"type": "碰", "tiles": ["1萬","1萬","1萬"]}, ...]
+    'winning_tile': None,   # 胡的那張
+    'flower_tiles': [],     # 花牌
+    'input_mode': '手牌',    # 當前輸入模式: 手牌 / 碰 / 吃
     'settings': {           
         'is_self_draw': False, 
-        'is_men_qing': False,  
         'wind_round': "東",     
         'wind_seat': "東"       
     }
@@ -67,200 +61,247 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# --- 4. 邏輯函式區域 (狀態操作) ---
+# --- 4. 邏輯函式區域 ---
+
+def get_total_count():
+    # 計算目前牌數：手牌 + 明牌*3 + 胡牌
+    # 這裡簡化計算：每個明牌組視為佔用3張空間
+    count = len(st.session_state.hand_tiles)
+    count += len(st.session_state.exposed_tiles) * 3
+    if st.session_state.winning_tile:
+        count += 1
+    return count
 
 def add_tile(tile, category):
-    # 花牌邏輯
+    mode = st.session_state.input_mode
+    
+    # === 花牌處理 (獨立) ===
     if category == "花":
         if tile in st.session_state.flower_tiles:
-            st.toast(f"⚠️ 花牌「{tile}」重複！", icon="🚫")
+            st.toast(f"⚠️ 花牌「{tile}」重複！")
             return
         st.session_state.flower_tiles.append(tile)
-        st.toast(f"已新增花牌：{tile}", icon="🌸")
+        st.toast(f"🌸 新增：{tile}")
         return
 
-    # 手牌邏輯
-    count_in_hand = st.session_state.hand_tiles.count(tile)
-    count_in_winning = 1 if st.session_state.winning_tile == tile else 0
-    
-    if (count_in_hand + count_in_winning) >= 4:
-        st.toast(f"⚠️ 「{tile}」已達4張上限！", icon="🚫")
+    # === 檢查總張數上限 ===
+    if get_total_count() >= 17:
+        st.toast("⚠️ 牌數已滿 (17張)！請先刪除。", icon="🛑")
         return
 
-    current_len = len(st.session_state.hand_tiles)
-    has_winning = st.session_state.winning_tile is not None
+    # === 模式 A: 新增手牌 ===
+    if mode == '手牌':
+        # 檢查手牌內重複 (最多4張)
+        current_hand = st.session_state.hand_tiles + ([st.session_state.winning_tile] if st.session_state.winning_tile else [])
+        if current_hand.count(tile) >= 4:
+            st.toast("⚠️ 手牌已達4張上限")
+            return
+            
+        # 判斷是加入手牌還是成為胡牌
+        if get_total_count() < 16:
+            st.session_state.hand_tiles.append(tile)
+        elif get_total_count() == 16:
+            st.session_state.winning_tile = tile
+        else:
+            st.toast("牌數已滿")
 
-    if current_len < 16:
-        st.session_state.hand_tiles.append(tile)
-    elif current_len == 16 and not has_winning:
-        st.session_state.winning_tile = tile
-    else:
-        st.toast("⚠️ 牌數已滿 (16+1張)！", icon="🛑")
+    # === 模式 B: 新增 碰/槓 (明牌) ===
+    elif mode == '碰/槓':
+        # 碰需要該牌剩餘張數足夠
+        # 這裡簡化檢查，直接加入
+        new_set = {"type": "碰", "tiles": [tile, tile, tile]}
+        st.session_state.exposed_tiles.append(new_set)
+        st.toast(f"⬇️ 碰：{tile}")
+        st.session_state.input_mode = '手牌' # 自動切回手牌模式方便操作
 
-def remove_last_tile():
+    # === 模式 C: 新增 吃 (明牌) ===
+    elif mode == '吃':
+        # 邏輯：點擊的是順子的「第一張」 (例如點 2萬 -> 吃 234萬)
+        if category == "字":
+            st.toast("❌ 字牌不能吃")
+            return
+        
+        try:
+            num = int(tile[:-1])
+            suit = tile[-1]
+            if num > 7:
+                st.toast(f"❌ {tile} 無法當作順子開頭 (最大只能吃到 789)")
+                return
+            
+            t1 = f"{num}{suit}"
+            t2 = f"{num+1}{suit}"
+            t3 = f"{num+2}{suit}"
+            
+            new_set = {"type": "吃", "tiles": [t1, t2, t3]}
+            st.session_state.exposed_tiles.append(new_set)
+            st.toast(f"⬇️ 吃：{t1}{t2}{t3}")
+            st.session_state.input_mode = '手牌'
+        except:
+            st.toast("❌ 格式錯誤")
+
+def remove_last_item():
+    # 優先移除胡牌 -> 手牌 -> 最後才是明牌
     if st.session_state.winning_tile:
         st.session_state.winning_tile = None
     elif st.session_state.hand_tiles:
         st.session_state.hand_tiles.pop()
-
-def remove_flower(tile):
-    if tile in st.session_state.flower_tiles:
-        st.session_state.flower_tiles.remove(tile)
+    elif st.session_state.exposed_tiles:
+        st.session_state.exposed_tiles.pop()
 
 def reset_game():
     st.session_state.hand_tiles = []
     st.session_state.winning_tile = None
     st.session_state.flower_tiles = []
+    st.session_state.exposed_tiles = []
+    st.session_state.input_mode = '手牌'
 
-# --- 5. 核心演算法區域 (包含遞迴檢查) ---
+# --- 5. 核心演算法 (平胡與胡牌判斷) ---
 
-def check_seven_pairs(counts):
-    """檢查七對子 (嚦咕嚦咕): 8個對子 + 1張眼 (共17張，但這裡只看結構)"""
-    # 注意：台灣麻將七對子通常是特殊牌型 (8對 + 1單)，或是 7對 + 1刻 (16張) 的特殊變體
-    # 這裡採用標準判斷：必須全部由對子或四張組成
-    total_count = sum(counts.values())
-    if total_count != 17: return False
+def try_remove_sets(counts):
+    """遞迴：檢查是否能組成 3+3+3...+2"""
+    available = sorted([t for t in counts if counts[t] > 0])
+    if not available: return True
+    first = available[0]
     
-    pairs = 0
-    threes = 0
-    fours = 0
-    
-    for tile, num in counts.items():
-        if num == 2: pairs += 1
-        elif num == 3: threes += 1 # 嚦咕嚦咕允許刻子當作3張單牌? 嚴格來說七對子不能有刻子
-        elif num == 4: fours += 1
-        else: return False # 單張或超過4張都不行
+    # 試刻子
+    if counts[first] >= 3:
+        counts[first] -= 3
+        if try_remove_sets(counts): return True
+        counts[first] += 3
         
-    # 寬鬆判定：只要能組成8個pair和1個單張即可
-    # 但標準七對子是 8個pair (其中可能有4張一樣算2個pair)
-    # 這裡簡化：檢查是否只有對子和四張，且總數對
-    # 為了簡化，若符合 pair*N + four*M 且總數17，就算過
-    # 實際上台灣麻將的嚦咕嚦咕規則複雜，這裡只做基礎檢查
-    valid_groups = pairs + fours * 2
-    return valid_groups == 8 and sum(counts.values()) == 17
+    # 試順子 (無字)
+    if "字" not in first:
+        try:
+            num = int(first[:-1])
+            suit = first[-1]
+            t2, t3 = f"{num+1}{suit}", f"{num+2}{suit}"
+            if counts[t2] > 0 and counts[t3] > 0:
+                counts[first]-=1; counts[t2]-=1; counts[t3]-=1
+                if try_remove_sets(counts): return True
+                counts[first]+=1; counts[t2]+=1; counts[t3]+=1
+        except: pass
+    return False
 
-def check_peng_peng_hu(counts):
-    """檢查碰碰胡：由 5 個刻子 + 1 個對子組成"""
-    # 這裡只檢查形狀是否為 AAA, BBB, CCC, DDD, EEE, FF
-    # 實際上需要遞迴檢查，因為可能有一對眼，剩下的全是刻子
+def check_standard_hu(counts):
+    """標準胡牌：5面子+1眼"""
+    if sum(counts.values()) % 3 != 2: return False # 剩餘牌數必須是 3N+2
     
-    # 簡單過濾：如果這副牌是碰碰胡，那它一定符合 Standard Hu，且沒有順子
-    # 所以我們只需要檢查：是不是所有面子都是刻子？
+    for tile in counts:
+        if counts[tile] >= 2:
+            counts[tile] -= 2
+            if try_remove_sets(counts):
+                counts[tile] += 2
+                return True
+            counts[tile] += 2
+    return False
+
+def check_seven_pairs(counts, exposed_len):
+    """七對子：不能有明牌"""
+    if exposed_len > 0: return False
+    if sum(counts.values()) != 17: return False
+    pairs = 0
+    for t in counts:
+        if counts[t] == 2: pairs += 1
+        elif counts[t] == 4: pairs += 2
+    return pairs == 8
+
+def check_ping_hu(counts, flowers, exposed_list):
+    """
+    平胡檢查 (嚴格版)：
+    1. 無花
+    2. 無字 (手牌與明牌都不能有字)
+    3. 無碰/槓 (明牌區不能有碰，手牌區不能有刻子)
+    4. 手牌必須全順子
+    5. 必須聽雙頭 (這裡假設成立，顯示時備註)
+    """
+    # 1. 無花
+    if flowers: return False
     
-    # 這裡用一個取巧的方法：先用 standard_hu 確保能胡，再來算是不是全刻子
-    # 但為了獨立性，我們先寫一個簡單檢查
-    
-    # 嘗試把每一張當眼，剩下的必須全都能被3整除
+    # 2. 明牌區檢查
+    for item in exposed_list:
+        if item['type'] == '碰': return False # 平胡不可有碰
+        for t in item['tiles']:
+            if "字" in t: return False # 平胡不可有字
+            
+    # 3. 手牌區檢查 (無字)
+    for t in counts:
+        if "字" in t: return False
+        
+    # 4. 手牌結構檢查：必須是 1眼 + 全順子 (不能有刻子)
+    # 邏輯：嘗試拔掉每一種眼，剩下的必須能「只用順子」組完
     for tile in counts:
         if counts[tile] >= 2:
             temp = counts.copy()
             temp[tile] -= 2
-            
-            all_triplets = True
-            for t, num in temp.items():
-                if num % 3 != 0:
-                    all_triplets = False
-                    break
-            if all_triplets:
+            if can_form_only_sequences(temp):
                 return True
     return False
 
-def try_remove_sets(counts):
-    """
-    [遞迴核心] 檢查剩下的牌是否能完全組成 順子 或 刻子
-    """
-    # 1. 找出目前還有剩餘的牌，並排序 (確保處理順序固定)
-    available_tiles = sorted([t for t in counts if counts[t] > 0])
+def can_form_only_sequences(counts):
+    """遞迴：剩下的牌只能組順子"""
+    available = sorted([t for t in counts if counts[t] > 0])
+    if not available: return True
+    first = available[0]
     
-    # Base Case: 如果沒有牌了，代表全部配對成功 -> True
-    if not available_tiles:
-        return True
-    
-    first = available_tiles[0]
-    
-    # 情況 A: 嘗試組「刻子」 (AAA)
-    if counts[first] >= 3:
-        counts[first] -= 3
-        if try_remove_sets(counts):
-            return True
-        counts[first] += 3 # 回溯 (復原)
-
-    # 情況 B: 嘗試組「順子」 (ABC) - 字牌與花牌不能組順子
-    if "字" not in first and "花" not in first: 
-        try:
-            # 解析：例如 "1萬" -> 1, "萬"
-            num = int(first[:-1])
-            suit = first[-1]
-            
-            # 順子需要 num+1, num+2
-            if num <= 7: # 只有 1~7 能當順子開頭
-                t2 = f"{num+1}{suit}"
-                t3 = f"{num+2}{suit}"
-                
-                if counts[t2] > 0 and counts[t3] > 0:
-                    counts[first] -= 1
-                    counts[t2] -= 1
-                    counts[t3] -= 1
-                    if try_remove_sets(counts):
-                        return True
-                    # 回溯
-                    counts[first] += 1
-                    counts[t2] += 1
-                    counts[t3] += 1
-        except:
-            pass 
-
-    return False
-
-def check_standard_hu(counts):
-    """
-    檢查一般胡牌型：5組面子 + 1對眼
-    """
-    # 總張數檢查 (16張手牌 + 1張胡牌 = 17)
-    if sum(counts.values()) != 17:
-        return False
-
-    # 嘗試每一種牌當作「眼」
-    for tile in counts:
-        if counts[tile] >= 2:
-            counts[tile] -= 2 # 拔掉眼
-            if try_remove_sets(counts):
-                counts[tile] += 2 # 復原
-                return True
-            counts[tile] += 2 # 復原，換下一張試試
-            
+    # 強制順子邏輯
+    try:
+        num = int(first[:-1])
+        suit = first[-1]
+        t2, t3 = f"{num+1}{suit}", f"{num+2}{suit}"
+        if counts[t2] > 0 and counts[t3] > 0:
+            counts[first]-=1; counts[t2]-=1; counts[t3]-=1
+            if can_form_only_sequences(counts): return True
+            counts[first]+=1; counts[t2]+=1; counts[t3]+=1
+    except: pass
     return False
 
 def calculate_tai():
     hand = st.session_state.hand_tiles + ([st.session_state.winning_tile] if st.session_state.winning_tile else [])
+    exposed_sets = st.session_state.exposed_tiles
     flowers = st.session_state.flower_tiles
     settings = st.session_state.settings
+    
+    # 門清狀態：若有明牌，強制非門清
+    is_actually_men_qing = (len(exposed_sets) == 0)
     
     counts = Counter(hand)
     details = []
     total_tai = 0
     
-    # === 步驟 1: 判斷是否胡牌 ===
-    # 注意：七對子不需要標準胡牌結構，所以分開判斷
-    is_seven = check_seven_pairs(counts)
-    is_standard = check_standard_hu(counts.copy())
+    # 1. 胡牌判斷
+    is_seven = check_seven_pairs(counts, len(exposed_sets))
+    is_standard = check_standard_hu(counts.copy()) # 只檢查手牌部分能否湊成面子
     
-    # 如果完全不符合胡牌規則
     if not (is_seven or is_standard):
-        return 0, ["❌ 尚未胡牌 (相公或牌型不符)"]
+        return 0, ["❌ 尚未胡牌 (手牌未湊齊)"]
 
-    # === 步驟 2: 計算台數 ===
+    # 2. 算台邏輯
     
-    # --- 特殊牌型偵測 ---
+    # --- 碰碰胡偵測 ---
+    # 定義：所有面子都是刻子 (包含明牌的碰 和 手牌的刻)
     is_peng_peng = False
     if is_standard:
-        # 只有在標準牌型下才檢查碰碰胡
-        is_peng_peng = check_peng_peng_hu(counts.copy())
+        # 檢查明牌是否全為碰
+        exposed_all_pong = all(item['type'] == '碰' for item in exposed_sets)
+        if exposed_all_pong:
+            # 檢查手牌去掉眼後，是否全為刻子
+            # 這裡簡化：若能胡且無順子結構，大機率是碰碰胡 (嚴格來說要寫遞迴check only triplets)
+            # 為了效能，這裡暫時假設：如果不是平胡，且明牌都是碰，且手牌無明顯順子(這裡難判斷)，就判斷碰碰胡？
+            # 修正：寫一個 check_only_triplets 比較保險
+            is_peng_peng = check_only_triplets_remain(counts.copy())
+            
+    # --- 平胡偵測 ---
+    is_ping_hu = False
+    if is_standard and not is_peng_peng:
+        if check_ping_hu(counts.copy(), flowers, exposed_sets):
+            is_ping_hu = True
 
-    # 花色判斷 (清一色/混一色/字一色)
+    # --- 花色判斷 ---
+    # 收集手牌 + 明牌的所有花色
+    all_tiles = hand + [t for s in exposed_sets for t in s['tiles']]
     suits = set()
     has_honors = False
-    for t in hand:
+    for t in all_tiles:
         if "萬" in t: suits.add("萬")
         elif "筒" in t: suits.add("筒")
         elif "條" in t: suits.add("條")
@@ -276,40 +317,43 @@ def calculate_tai():
         details.append("混一色 (4台)")
         total_tai += 4
 
-    # 牌型加台
+    # --- 牌型台數 ---
     if is_seven:
-        details.append("七對子 (8台)") # 嚦咕嚦咕
+        details.append("七對子 (8台)")
         total_tai += 8
     elif is_peng_peng:
         details.append("碰碰胡 (4台)")
         total_tai += 4
-    
-    # 平胡判定 (非常簡化版：若是標準胡且無花、無字、非碰碰胡、非獨聽... 這裡暫時只給標準底台概念)
-    # 真實平胡邏輯太複雜(涉及聽牌方式)，這裡不做嚴格平胡檢查
-    if is_standard and not is_peng_peng and len(details) == 0:
-        pass # 普通牌型
-
+    elif is_ping_hu:
+        details.append("平胡 (2台) *非獨聽")
+        total_tai += 2
+        
     # --- 三元牌與風牌 ---
+    # 需統計手牌 + 明牌
+    total_counts = Counter(all_tiles)
     for dragon in ["中", "發", "白"]:
-        if counts[dragon] >= 3:
+        if total_counts[dragon] >= 3:
             details.append(f"{dragon}刻 (1台)")
             total_tai += 1
-            
-    if counts[settings['wind_round']] >= 3:
+    if total_counts[settings['wind_round']] >= 3:
         details.append(f"圈風{settings['wind_round']} (1台)")
         total_tai += 1
-    if counts[settings['wind_seat']] >= 3:
+    if total_counts[settings['wind_seat']] >= 3:
         details.append(f"門風{settings['wind_seat']} (1台)")
         total_tai += 1
 
-    # --- 狀態台數 ---
-    if settings['is_men_qing'] and settings['is_self_draw']:
-        details.append("門清自摸 (3台)")
-        total_tai += 3
-    else:
-        if settings['is_men_qing']:
+    # --- 狀態台數 (門清/自摸) ---
+    # 門清條件：無明牌
+    if is_actually_men_qing:
+        if settings['is_self_draw']:
+            details.append("門清自摸 (3台)") # 1+1+1
+            total_tai += 3
+        else:
+            # 只有門清，沒自摸
             details.append("門清 (1台)")
             total_tai += 1
+    else:
+        # 非門清，只有自摸算台
         if settings['is_self_draw']:
             details.append("自摸 (1台)")
             total_tai += 1
@@ -318,93 +362,129 @@ def calculate_tai():
     if flowers:
         details.append(f"花牌 x{len(flowers)} ({len(flowers)}台)")
         total_tai += len(flowers)
-        
-    # 若計算結果為 0 台，但已確認胡牌
+
     if total_tai == 0:
-        details.append("一般胡牌 (無特殊台數)")
+        details.append("一般胡牌 (屁胡)")
 
     return total_tai, details
 
+def check_only_triplets_remain(counts):
+    """檢查手牌是否全為刻子+1眼"""
+    # 拔眼
+    for tile in counts:
+        if counts[tile] >= 2:
+            temp = counts.copy()
+            temp[tile] -= 2
+            # 剩下的必須全都能被3整除 (簡單檢查)
+            if all(temp[t] % 3 == 0 for t in temp):
+                return True
+    return False
 
-# --- 6. UI 介面 (手機版重構) ---
+# --- 6. UI 介面 ---
 
-st.title("🀄 台麻計算機")
+st.title("🀄 台麻計算機 (Pro)")
 
-# === 區塊 A: 狀態顯示 Dashboard ===
+# === 區塊 A: 狀態顯示 ===
 with st.container(border=True):
-    # 1. 顯示胡的那張牌
-    c_win_label, c_win_tile = st.columns([2, 1])
-    with c_win_label:
-        st.subheader("🖐️ 胡牌")
-        if not st.session_state.winning_tile:
-            st.caption("請點選第17張")
-    with c_win_tile:
-        if st.session_state.winning_tile:
-            st.button(st.session_state.winning_tile, key="win_display", type="primary")
-        else:
-            st.button("?", disabled=True)
-
-    st.divider()
-
-    # 2. 顯示手牌
-    st.subheader(f"🎴 手牌 ({len(st.session_state.hand_tiles)}/16)")
-    sorted_hand = sorted(st.session_state.hand_tiles)
+    # 1. 顯示胡的那張
+    c1, c2 = st.columns([3, 1])
+    c1.subheader("🖐️ 胡牌")
+    if st.session_state.winning_tile:
+        c2.button(st.session_state.winning_tile, key="win_btn", type="primary")
+    else:
+        c2.button("?", disabled=True)
     
+    st.divider()
+    
+    # 2. 明牌區 (吃碰槓)
+    if st.session_state.exposed_tiles:
+        st.caption("🔽 明牌區 (落地)")
+        cols_ex = st.columns(4)
+        for i, item in enumerate(st.session_state.exposed_tiles):
+            label = "".join(item['tiles'])
+            cols_ex[i % 4].info(f"{label}")
+        st.divider()
+
+    # 3. 手牌區 (暗牌)
+    st.subheader(f"🎴 手牌 (暗) {len(st.session_state.hand_tiles)}張")
+    sorted_hand = sorted(st.session_state.hand_tiles)
     if sorted_hand:
         tiles_per_row = 8 
         num_rows = math.ceil(len(sorted_hand) / tiles_per_row)
-        
         for r in range(num_rows):
             cols = st.columns(tiles_per_row)
-            start_idx = r * tiles_per_row
-            end_idx = min(start_idx + tiles_per_row, len(sorted_hand))
-            
-            for i in range(start_idx, end_idx):
-                col_idx = i - start_idx
-                cols[col_idx].button(sorted_hand[i], key=f"h_{i}", disabled=True)
+            for i in range(tiles_per_row):
+                idx = r * tiles_per_row + i
+                if idx < len(sorted_hand):
+                    cols[i].button(sorted_hand[idx], key=f"h_{idx}", disabled=True)
     else:
-        st.info("尚未新增手牌")
+        st.info("請輸入手牌")
 
-    # 3. 花牌顯示
+    # 4. 花牌
     if st.session_state.flower_tiles:
         st.divider()
-        st.write(f"🌸 花牌 ({len(st.session_state.flower_tiles)}) - 點擊移除")
-        f_cols = st.columns(8)
-        for i, f in enumerate(st.session_state.flower_tiles):
-            if f_cols[i % 8].button(f, key=f"f_del_{i}"):
-                remove_flower(f)
-                st.rerun()
+        st.write(f"🌸 花: {' '.join(st.session_state.flower_tiles)}")
 
-# === 區塊 B: 控制按鈕 ===
+# === 區塊 B: 輸入模式切換 (關鍵) ===
+st.write("---")
+mode_cols = st.columns(3)
+mode_options = ["手牌", "吃", "碰/槓"]
+st.session_state.input_mode = st.radio("👇 選擇輸入模式：", mode_options, horizontal=True, label_visibility="collapsed")
+
+if st.session_state.input_mode == "吃":
+    st.caption("💡 提示：點擊「2萬」會自動加入「234萬」")
+elif st.session_state.input_mode == "碰/槓":
+    st.caption("💡 提示：點擊「中」會自動加入「中中中」")
+
+# === 區塊 C: 牌型鍵盤 ===
+tab_names = ["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"]
+tabs = st.tabs(tab_names)
+
+def render_numpad(tiles, category_key):
+    for row in range(3):
+        cols = st.columns(3)
+        for col in range(3):
+            idx = row * 3 + col
+            if idx < len(tiles):
+                tile = tiles[idx]
+                if cols[col].button(tile, key=f"btn_{category_key}_{tile}"):
+                    add_tile(tile, category_key)
+                    st.rerun()
+
+with tabs[0]: render_numpad(TILES["萬"], "萬")
+with tabs[1]: render_numpad(TILES["筒"], "筒")
+with tabs[2]: render_numpad(TILES["條"], "條")
+with tabs[3]: 
+    c1 = st.columns(4); 
+    for i in range(4): 
+        t=TILES["字"][i]
+        if c1[i].button(t): add_tile(t,"字"); st.rerun()
+    c2 = st.columns(4)
+    for i in range(4,7): 
+        t=TILES["字"][i]
+        if c2[i-4].button(t): add_tile(t,"字"); st.rerun()
+with tabs[4]:
+    c1 = st.columns(4)
+    for i in range(8):
+        t = TILES["花"][i]
+        if c1[i%4].button(t): add_tile(t, "花"); st.rerun()
+
+# === 區塊 D: 控制與計算 ===
+st.write("---")
 c_ctrl1, c_ctrl2 = st.columns(2)
-with c_ctrl1:
-    if st.button("⬅️ 退回", use_container_width=True):
-        remove_last_tile()
-        st.rerun()
-with c_ctrl2:
-    if st.button("🗑️ 清空", type="primary", use_container_width=True):
-        reset_game()
-        st.rerun()
+if c_ctrl1.button("⬅️ 退回"): remove_last_item(); st.rerun()
+if c_ctrl2.button("🗑️ 清空", type="primary"): reset_game(); st.rerun()
 
-# === 區塊 C: 遊戲設定 (Expander) ===
-with st.expander("⚙️ 設定 (圈風/門風/門清)", expanded=False):
-    c_s1, c_s2 = st.columns(2)
-    with c_s1:
-        st.session_state.settings['is_self_draw'] = st.checkbox("自摸", value=st.session_state.settings['is_self_draw'])
-    with c_s2:
-        st.session_state.settings['is_men_qing'] = st.checkbox("門清", value=st.session_state.settings['is_men_qing'])
-    
-    c_w1, c_w2 = st.columns(2)
-    with c_w1:
-        st.session_state.settings['wind_round'] = st.selectbox("圈風", ["東", "南", "西", "北"])
-    with c_w2:
-        st.session_state.settings['wind_seat'] = st.selectbox("門風", ["東", "南", "西", "北"])
+with st.expander("⚙️ 設定 (自摸/風位)", expanded=True):
+    st.session_state.settings['is_self_draw'] = st.toggle("自摸", value=st.session_state.settings['is_self_draw'])
+    c1, c2 = st.columns(2)
+    st.session_state.settings['wind_round'] = c1.selectbox("圈風", ["東", "南", "西", "北"])
+    st.session_state.settings['wind_seat'] = c2.selectbox("門風", ["東", "南", "西", "北"])
 
-# === 區塊 D: 計算按鈕 ===
-if st.button("🧮 計算台數", type="primary", use_container_width=True):
-    valid_len = len(st.session_state.hand_tiles) == 16 and st.session_state.winning_tile is not None
-    if not valid_len:
-        st.error("❌ 牌數不足 (需 16+1 張)")
+if st.button("🧮 計算台數", type="primary"):
+    total_cnt = get_total_count()
+    if total_cnt != 17:
+        st.error(f"❌ 牌數錯誤：目前 {total_cnt} 張 (應為 17)")
     else:
         score, details = calculate_tai()
         if "❌" in details[0]:
@@ -414,56 +494,3 @@ if st.button("🧮 計算台數", type="primary", use_container_width=True):
             st.success(f"### 總計：{score} 台")
             for d in details:
                 st.info(d)
-
-# === 區塊 E: 牌型鍵盤 (5個分頁) ===
-st.markdown("---")
-st.write("👇 **點擊新增牌型**")
-
-tab_names = ["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"]
-tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
-
-def render_numpad(tiles, category_key):
-    for row in range(3):
-        cols = st.columns(3)
-        for col in range(3):
-            idx = row * 3 + col
-            if idx < len(tiles):
-                tile = tiles[idx]
-                if cols[col].button(tile, key=f"btn_{category_key}_{tile}", use_container_width=True):
-                    add_tile(tile, category_key)
-                    st.rerun()
-
-with tab1:
-    render_numpad(TILES["萬"], "萬")
-with tab2:
-    render_numpad(TILES["筒"], "筒")
-with tab3:
-    render_numpad(TILES["條"], "條")
-
-with tab4:
-    cols_z1 = st.columns(4)
-    for i in range(4):
-        t = TILES["字"][i]
-        if cols_z1[i].button(t, key=f"z_{t}", use_container_width=True):
-            add_tile(t, "字")
-            st.rerun()
-    cols_z2 = st.columns(4)
-    for i in range(4, 7):
-        t = TILES["字"][i]
-        if cols_z2[i-4].button(t, key=f"z_{t}", use_container_width=True):
-            add_tile(t, "字")
-            st.rerun()
-
-with tab5:
-    cols_h1 = st.columns(4)
-    for i in range(4):
-        t = TILES["花"][i]
-        if cols_h1[i].button(t, key=f"h_{t}", use_container_width=True):
-            add_tile(t, "花")
-            st.rerun()
-    cols_h2 = st.columns(4)
-    for i in range(4, 8):
-        t = TILES["花"][i]
-        if cols_h2[i-4].button(t, key=f"h_{t}", use_container_width=True):
-            add_tile(t, "花")
-            st.rerun()
