@@ -1,8 +1,6 @@
 import streamlit as st
 from collections import Counter
 import math
-import tempfile
-import os
 import requests 
 
 # ==========================================
@@ -38,11 +36,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. API 設定 (已填入你的資料)
+# 2. API 設定
 # ==========================================
 ROBOFLOW_API_KEY = "dKsZfGd1QysNKSoaIT1m"
-
-# 你的模型 ID (保持不變)
 MODEL_ID = "mahjong-baq4s-c3ovv/1"
 
 # ==========================================
@@ -56,6 +52,8 @@ default_states = {
     'input_mode': '手牌',    
     'settings': {           
         'is_self_draw': False, 
+        'is_dealer': False,     
+        'streak': 0,            
         'wind_round': "東",     
         'wind_seat': "東"       
     }
@@ -64,6 +62,11 @@ default_states = {
 for key, value in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = value
+
+if 'is_dealer' not in st.session_state.settings:
+    st.session_state.settings['is_dealer'] = False
+if 'streak' not in st.session_state.settings:
+    st.session_state.settings['streak'] = 0
 
 # ==========================================
 # 4. 定義牌資料與對應表
@@ -76,38 +79,19 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# ==========================================
-# 最終精簡版 Mapping (依據模型實際清單)
-# ==========================================
 API_MAPPING = {
-    # === 萬子 (Characters -> C) ===
     "1C": "1萬", "2C": "2萬", "3C": "3萬", 
     "4C": "4萬", "5C": "5萬", "6C": "6萬", 
     "7C": "7萬", "8C": "8萬", "9C": "9萬",
-    
-    # === 筒子 (Dots -> D) ===
     "1D": "1筒", "2D": "2筒", "3D": "3筒", 
     "4D": "4筒", "5D": "5筒", "6D": "6筒", 
     "7D": "7筒", "8D": "8筒", "9D": "9筒",
-    
-    # === 條子 (Bamboo -> B) ===
-    # 你的模型只有 B 系列有 1-9
     "1B": "1條", "2B": "2條", "3B": "3條", 
     "4B": "4條", "5B": "5條", "6B": "6條", 
     "7B": "7條", "8B": "8條", "9B": "9條",
-
-    # === 花牌組 1 (Seasons: 春夏秋冬) ===
-    # 模型只有 1S ~ 4S
     "1S": "花", "2S": "花", "3S": "花", "4S": "花",
-    
-    # === 花牌組 2 (Plants: 梅蘭竹菊) ===
-    # 模型只有 1F ~ 4F
     "1F": "花", "2F": "花", "3F": "花", "4F": "花",
-    
-    # === 風牌 (Winds) ===
     "EW": "東", "SW": "南", "WW": "西", "NW": "北",
-    
-    # === 三元牌 (Dragons) ===
     "RD": "中", "GD": "發", "WD": "白"
 }
 
@@ -115,22 +99,15 @@ API_MAPPING = {
 # 5. 邏輯函式
 # ==========================================
 
-# 修改函式定義，增加兩個參數預設值
 def call_roboflow_api(image_file, confidence=40, overlap=30):
-    """
-    接收圖片與參數，呼叫 Roboflow API
-    """
-    # 將參數動態填入網址
     upload_url = "".join([
         "https://detect.roboflow.com/",
         MODEL_ID,
         "?api_key=", ROBOFLOW_API_KEY,
-        # 這裡改成用傳進來的變數
         f"&confidence={confidence}&overlap={overlap}&format=json"
     ])
 
     try:
-        # ... (中間上傳程式碼不用變) ...
         filename = getattr(image_file, 'name', 'image.jpg')
         file_bytes = image_file.getvalue()
         
@@ -138,7 +115,6 @@ def call_roboflow_api(image_file, confidence=40, overlap=30):
             upload_url,
             files={"file": (filename, file_bytes, "image/jpeg")}
         )
-        # ... (後面處理邏輯不用變) ...
         
         if response.status_code != 200:
             st.error(f"API 錯誤 ({response.status_code}): {response.text}")
@@ -146,7 +122,6 @@ def call_roboflow_api(image_file, confidence=40, overlap=30):
 
         result = response.json()
         
-        # ... (回傳邏輯不用變) ...
         if 'predictions' in result:
             predictions = result['predictions']
             predictions.sort(key=lambda x: x['x'])
@@ -155,43 +130,6 @@ def call_roboflow_api(image_file, confidence=40, overlap=30):
             for p in predictions:
                 raw = p['class']
                 app_name = API_MAPPING.get(raw, raw)
-                if "萬" in app_name or "筒" in app_name or "條" in app_name or app_name in TILES["字"] or app_name in TILES["花"]:
-                    detected_tiles.append(app_name)
-            return detected_tiles
-        return []
-
-    except Exception as e:
-        st.error(f"連線錯誤: {e}")
-        return []
-
-    try:
-        # 使用 multipart 上傳圖片，避免 500 錯誤
-        filename = getattr(image_file, 'name', 'image.jpg')
-        file_bytes = image_file.getvalue()
-        
-        response = requests.post(
-            upload_url,
-            files={
-                "file": (filename, file_bytes, "image/jpeg")
-            }
-        )
-        
-        if response.status_code != 200:
-            st.error(f"API 錯誤 ({response.status_code}): {response.text}")
-            return []
-
-        result = response.json()
-
-        if 'predictions' in result:
-            predictions = result['predictions']
-            # 依 x 軸排序 (由左到右)
-            predictions.sort(key=lambda x: x['x'])
-            
-            detected_tiles = []
-            for p in predictions:
-                raw = p['class']
-                app_name = API_MAPPING.get(raw, raw)
-                # 過濾合法牌名
                 if "萬" in app_name or "筒" in app_name or "條" in app_name or app_name in TILES["字"] or app_name in TILES["花"]:
                     detected_tiles.append(app_name)
             return detected_tiles
@@ -336,12 +274,17 @@ def check_ping_hu(counts, flowers, exposed_list):
     return False
 
 def calculate_tai():
-    hand = st.session_state.hand_tiles + ([st.session_state.winning_tile] if st.session_state.winning_tile else [])
+    # 基礎手牌 (純手牌，不含贏的那張，除非是自摸)
+    hand = st.session_state.hand_tiles[:]
+    win_tile = st.session_state.winning_tile
     exposed_sets = st.session_state.exposed_tiles
     flowers = st.session_state.flower_tiles
     settings = st.session_state.settings
     
-    counts = Counter(hand)
+    # 完整的牌 (用於判斷胡牌)
+    full_hand = hand + ([win_tile] if win_tile else [])
+    counts = Counter(full_hand)
+    
     details = []
     total_tai = 0
     
@@ -351,26 +294,61 @@ def calculate_tai():
     if not (is_seven or is_standard):
         return 0, ["❌ 尚未胡牌"]
 
+    # --- 1. 莊家與連莊 ---
+    if settings.get('is_dealer', False):
+        details.append("莊家 (1台)")
+        total_tai += 1
+    
+    streak = settings.get('streak', 0)
+    if streak > 0:
+        s_tai = streak * 2
+        details.append(f"連{streak}拉{streak} ({s_tai}台)")
+        total_tai += s_tai
+
+    # --- 2. 暗刻計算 (新增功能) ---
+    # 邏輯：自摸時，胡的那張算手牌(可湊暗刻)；放槍時，胡的那張算明刻(不計入暗刻)
+    an_ke_hand = st.session_state.hand_tiles[:]
+    if settings['is_self_draw'] and win_tile:
+        an_ke_hand.append(win_tile)
+    
+    an_ke_counts = Counter(an_ke_hand)
+    num_an_ke = 0
+    for t in an_ke_counts:
+        # 手牌內有3張或4張一樣的，視為暗刻 (注意：不含槓牌邏輯，純以手牌張數判定)
+        if an_ke_counts[t] >= 3:
+            num_an_ke += 1
+            
+    if num_an_ke == 3:
+        details.append("三暗刻 (2台)")
+        total_tai += 2
+    elif num_an_ke == 4:
+        details.append("四暗刻 (5台)")
+        total_tai += 5
+    elif num_an_ke >= 5:
+        details.append("五暗刻 (8台)")
+        total_tai += 8
+    # --------------------------
+
     is_peng_peng = False
     is_ping_hu = False
     
     if is_standard:
         exposed_all_pong = all(item['type'] == '碰' for item in exposed_sets)
-        # 簡易判斷碰碰胡
         for tile in counts:
             if counts[tile] >= 2:
                 temp = counts.copy()
                 temp[tile] -= 2
-                # 檢查剩下是否全被3整除
                 if all(temp[t] % 3 == 0 for t in temp) and exposed_all_pong:
                     is_peng_peng = True
                     break
         
     if is_standard and not is_peng_peng:
         if check_ping_hu(counts.copy(), flowers, exposed_sets):
+            # 平胡條件嚴格：不能有花、不能有字、不能有暗刻(通常定義)、只能有順子
+            # 若有暗刻通常不算平胡，但這裡保留寬鬆邏輯，若符合平胡型態則給分
             is_ping_hu = True
 
-    all_tiles = hand + [t for s in exposed_sets for t in s['tiles']]
+    all_tiles = full_hand + [t for s in exposed_sets for t in s['tiles']]
     suits = set()
     has_honors = False
     for t in all_tiles:
@@ -410,23 +388,15 @@ def calculate_tai():
 
 st.title("🀄 台麻計算機 (AI版)")
 
-
-# === A. AI 辨識區塊 (整合：參數微調 + 上傳功能 + 暫存修正) ===
 with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     st.caption(f"目前模型: {MODEL_ID}")
     
-    # --- 1. 新增：參數微調區 (放在最上方讓使用者先設定) ---
     with st.expander("🛠️ 進階參數設定 (辨識不準請點我)", expanded=False):
         st.caption("調整 AI 的靈敏度")
         col_conf, col_iou = st.columns(2)
-        
-        # 信心度：預設 40 (越低抓越多，越高越嚴格)
-        conf_threshold = col_conf.slider("信心度 (Confidence)", 1, 100, 40, help="如果漏抓牌，請調低此數值")
-        # 重疊度：預設 30 (如果一張牌出現兩個框，請調低)
-        overlap_threshold = col_iou.slider("重疊過濾 (Overlap)", 1, 100, 30, help="如果框框重疊嚴重，請調整此數值")
-    # ------------------------------------------------
+        conf_threshold = col_conf.slider("信心度 (Confidence)", 1, 100, 40)
+        overlap_threshold = col_iou.slider("重疊過濾 (Overlap)", 1, 100, 30)
 
-    # 2. 選擇輸入方式
     input_source = st.radio("輸入來源", ["📸 使用相機", "📂 上傳照片"], horizontal=True, label_visibility="collapsed")
     
     img_file = None
@@ -435,21 +405,15 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     else:
         img_file = st.file_uploader("請上傳麻將照片 (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
 
-    # 3. 初始化暫存狀態 (如果還沒有)
     if 'ai_temp_result' not in st.session_state:
         st.session_state['ai_temp_result'] = []
 
-    # 4. 執行辨識 (按下後存入 session_state)
     if img_file is not None:
         if st.button("🚀 傳送辨識", type="primary"):
             with st.spinner("☁️ AI 運算中..."):
                 try:
-                    # 關鍵修改：將拉桿的數值 (conf_threshold, overlap_threshold) 傳入函式
-                    # 注意：請確保你的 call_roboflow_api 函式已經更新為可以接收這些參數的版本
                     result_list = call_roboflow_api(img_file, confidence=conf_threshold, overlap=overlap_threshold)
-                    
                     if result_list:
-                        # 把結果存起來！
                         st.session_state['ai_temp_result'] = result_list
                         st.success(f"成功辨識 {len(result_list)} 張")
                     else:
@@ -458,13 +422,9 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
                 except Exception as e:
                     st.error(f"API 錯誤: {e}")
 
-    # 5. 顯示結果與填入按鈕 (讀取 session_state，確保 Rerun 後按鈕還在)
     if st.session_state['ai_temp_result']:
         st.write("結果：", " ".join(st.session_state['ai_temp_result']))
-        
         c1, c2 = st.columns(2)
-        
-        # 按鈕 A: 全部填入
         if c1.button("📥 全部填入 (含胡)"):
             result = st.session_state['ai_temp_result']
             reset_game()
@@ -473,19 +433,15 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
                 st.session_state.hand_tiles = result[:-1]
             else:
                 st.session_state.hand_tiles = result
-            # 清空暫存並刷新
             st.session_state['ai_temp_result'] = []
             st.rerun()
-
-        # 按鈕 B: 僅填手牌
         if c2.button("📥 僅填手牌"):
             result = st.session_state['ai_temp_result']
             reset_game()
             st.session_state.hand_tiles = result
-            # 清空暫存並刷新
             st.session_state['ai_temp_result'] = []
             st.rerun()
-# Dashboard
+
 with st.container(border=True):
     c1, c2 = st.columns([3, 1])
     c1.subheader("🖐️ 胡牌")
@@ -557,8 +513,12 @@ cc1, cc2 = st.columns(2)
 if cc1.button("⬅️ 退回"): remove_last_item(); st.rerun()
 if cc2.button("🗑️ 清空", type="primary"): reset_game(); st.rerun()
 
+# === 設定區塊 ===
 with st.expander("⚙️ 設定", expanded=True):
-    st.session_state.settings['is_self_draw'] = st.toggle("自摸", value=st.session_state.settings['is_self_draw'])
+    c1, c2 = st.columns(2)
+    st.session_state.settings['is_self_draw'] = c1.toggle("自摸", value=st.session_state.settings['is_self_draw'])
+    st.session_state.settings['is_dealer'] = c2.toggle("莊家", value=st.session_state.settings['is_dealer'])
+    st.session_state.settings['streak'] = st.number_input("連莊數 (n)", min_value=0, value=st.session_state.settings['streak'], help="連n拉n，台數加倍")
     sc1, sc2 = st.columns(2)
     st.session_state.settings['wind_round'] = sc1.selectbox("圈風", ["東","南","西","北"])
     st.session_state.settings['wind_seat'] = sc2.selectbox("門風", ["東","南","西","北"])
