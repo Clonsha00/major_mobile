@@ -103,14 +103,54 @@ API_MAPPING = {
 # 5. 邏輯函式
 # ==========================================
 
-def call_roboflow_api(image_file):
-    """使用 requests 直接呼叫 API (multipart/form-data)"""
+# 修改函式定義，增加兩個參數預設值
+def call_roboflow_api(image_file, confidence=40, overlap=30):
+    """
+    接收圖片與參數，呼叫 Roboflow API
+    """
+    # 將參數動態填入網址
     upload_url = "".join([
         "https://detect.roboflow.com/",
         MODEL_ID,
         "?api_key=", ROBOFLOW_API_KEY,
-        "&confidence=50&overlap=95&format=json"
+        # 這裡改成用傳進來的變數
+        f"&confidence={confidence}&overlap={overlap}&format=json"
     ])
+
+    try:
+        # ... (中間上傳程式碼不用變) ...
+        filename = getattr(image_file, 'name', 'image.jpg')
+        file_bytes = image_file.getvalue()
+        
+        response = requests.post(
+            upload_url,
+            files={"file": (filename, file_bytes, "image/jpeg")}
+        )
+        # ... (後面處理邏輯不用變) ...
+        
+        if response.status_code != 200:
+            st.error(f"API 錯誤 ({response.status_code}): {response.text}")
+            return []
+
+        result = response.json()
+        
+        # ... (回傳邏輯不用變) ...
+        if 'predictions' in result:
+            predictions = result['predictions']
+            predictions.sort(key=lambda x: x['x'])
+            
+            detected_tiles = []
+            for p in predictions:
+                raw = p['class']
+                app_name = API_MAPPING.get(raw, raw)
+                if "萬" in app_name or "筒" in app_name or "條" in app_name or app_name in TILES["字"] or app_name in TILES["花"]:
+                    detected_tiles.append(app_name)
+            return detected_tiles
+        return []
+
+    except Exception as e:
+        st.error(f"連線錯誤: {e}")
+        return []
 
     try:
         # 使用 multipart 上傳圖片，避免 500 錯誤
@@ -358,11 +398,23 @@ def calculate_tai():
 
 st.title("🀄 台麻計算機 (AI版)")
 
-# === A. AI 辨識區塊 (修正按鈕失效問題) ===
+
+# === A. AI 辨識區塊 (整合：參數微調 + 上傳功能 + 暫存修正) ===
 with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     st.caption(f"目前模型: {MODEL_ID}")
     
-    # 1. 選擇輸入方式
+    # --- 1. 新增：參數微調區 (放在最上方讓使用者先設定) ---
+    with st.expander("🛠️ 進階參數設定 (辨識不準請點我)", expanded=False):
+        st.caption("調整 AI 的靈敏度")
+        col_conf, col_iou = st.columns(2)
+        
+        # 信心度：預設 40 (越低抓越多，越高越嚴格)
+        conf_threshold = col_conf.slider("信心度 (Confidence)", 1, 100, 40, help="如果漏抓牌，請調低此數值")
+        # 重疊度：預設 30 (如果一張牌出現兩個框，請調低)
+        overlap_threshold = col_iou.slider("重疊過濾 (Overlap)", 1, 100, 30, help="如果框框重疊嚴重，請調整此數值")
+    # ------------------------------------------------
+
+    # 2. 選擇輸入方式
     input_source = st.radio("輸入來源", ["📸 使用相機", "📂 上傳照片"], horizontal=True, label_visibility="collapsed")
     
     img_file = None
@@ -371,30 +423,30 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     else:
         img_file = st.file_uploader("請上傳麻將照片 (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
 
-    # 2. 初始化暫存狀態 (如果還沒有)
+    # 3. 初始化暫存狀態 (如果還沒有)
     if 'ai_temp_result' not in st.session_state:
         st.session_state['ai_temp_result'] = []
 
-    # 3. 執行辨識 (按下後存入 session_state)
+    # 4. 執行辨識 (按下後存入 session_state)
     if img_file is not None:
         if st.button("🚀 傳送辨識", type="primary"):
             with st.spinner("☁️ AI 運算中..."):
                 try:
-                    # 呼叫 API
-                    result_list = call_roboflow_api(img_file)
+                    # 關鍵修改：將拉桿的數值 (conf_threshold, overlap_threshold) 傳入函式
+                    # 注意：請確保你的 call_roboflow_api 函式已經更新為可以接收這些參數的版本
+                    result_list = call_roboflow_api(img_file, confidence=conf_threshold, overlap=overlap_threshold)
                     
                     if result_list:
-                        # 關鍵修正：把結果存起來！
+                        # 把結果存起來！
                         st.session_state['ai_temp_result'] = result_list
                         st.success(f"成功辨識 {len(result_list)} 張")
                     else:
                         st.session_state['ai_temp_result'] = []
-                        st.warning("⚠️ 未偵測到牌，請確認照片清晰。")
+                        st.warning("⚠️ 未偵測到牌，請嘗試調低「信心度」。")
                 except Exception as e:
                     st.error(f"API 錯誤: {e}")
 
-    # 4. 顯示結果與填入按鈕 (讀取 session_state)
-    # 只要暫存區有東西，就顯示按鈕，不受 rerun 影響
+    # 5. 顯示結果與填入按鈕 (讀取 session_state，確保 Rerun 後按鈕還在)
     if st.session_state['ai_temp_result']:
         st.write("結果：", " ".join(st.session_state['ai_temp_result']))
         
@@ -421,7 +473,6 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
             # 清空暫存並刷新
             st.session_state['ai_temp_result'] = []
             st.rerun()
-
 # Dashboard
 with st.container(border=True):
     c1, c2 = st.columns([3, 1])
