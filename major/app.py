@@ -41,6 +41,8 @@ st.markdown("""
 # 2. API 設定 (已填入你的資料)
 # ==========================================
 ROBOFLOW_API_KEY = "rf_4Ywzw4lfTsVYGxr774IWjnYg8XU2"
+
+# 你的模型 ID (保持不變)
 MODEL_ID = "mahjong-baq4s-c3ovv/1"
 
 # ==========================================
