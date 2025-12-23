@@ -1,13 +1,24 @@
 import streamlit as st
 from collections import Counter
 import math
+import tempfile
+import os
+import requests  # 記得在檔案最上方 import requests
+# 嘗試匯入 Roboflow SDK，若沒安裝則提示
+try:
+    import requests
+    HAS_SDK = True
+except ImportError:
+    HAS_SDK = False
 
-# --- 1. 設定頁面配置 ---
-st.set_page_config(page_title="台灣麻將計算機(含明牌)", layout="centered", page_icon="🀄")
+# ==========================================
+# 1. 設定與 CSS 優化
+# ==========================================
+st.set_page_config(page_title="台灣麻將計算機 (AI版)", layout="centered", page_icon="🀄")
 
-# --- CSS樣式優化 ---
 st.markdown("""
 <style>
+    /* 手機版按鈕優化 */
     div.stButton > button {
         height: 3.2rem; 
         width: 100%;
@@ -17,30 +28,34 @@ st.markdown("""
         margin-bottom: 5px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    /* Tabs 優化 */
     button[data-baseweb="tab"] {
         font-size: 16px !important;
         font-weight: bold;
         padding: 0.5rem 0.5rem !important;
     }
+    /* 調整邊距 */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 5rem;
     }
-    /* 強調目前選中的模式 */
+    /* 強調輸入模式 */
     div[data-testid="stRadio"] > label {
         font-weight: bold;
-        font-size: 18px;
+        font-size: 16px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 初始化 Session State ---
+# ==========================================
+# 2. 初始化 Session State
+# ==========================================
 default_states = {
     'hand_tiles': [],       # 手牌 (暗牌)
-    'exposed_tiles': [],    # 明牌 (吃/碰/槓) -> 儲存格式: [{"type": "碰", "tiles": ["1萬","1萬","1萬"]}, ...]
+    'exposed_tiles': [],    # 明牌 (吃/碰/槓) -> 格式: [{"type": "碰", "tiles": ["1萬","1萬","1萬"]}, ...]
     'winning_tile': None,   # 胡的那張
     'flower_tiles': [],     # 花牌
-    'input_mode': '手牌',    # 當前輸入模式: 手牌 / 碰 / 吃
+    'input_mode': '手牌',    # 當前模式
     'settings': {           
         'is_self_draw': False, 
         'wind_round': "東",     
@@ -52,7 +67,9 @@ for key, value in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-# --- 3. 定義牌資料 ---
+# ==========================================
+# 3. 定義牌資料與對應表
+# ==========================================
 TILES = {
     "萬": [f"{i}萬" for i in range(1, 10)],
     "筒": [f"{i}筒" for i in range(1, 10)],
@@ -61,11 +78,89 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# --- 4. 邏輯函式區域 ---
+# Roboflow API 回傳標籤對應表
+API_MAPPING = {
+    # 萬
+    "1m": "1萬", "2m": "2萬", "3m": "3萬", "4m": "4萬", "5m": "5萬", "6m": "6萬", "7m": "7萬", "8m": "8萬", "9m": "9萬",
+    "1man": "1萬", "2man": "2萬", "3man": "3萬", "4man": "4萬", "5man": "5萬", "6man": "6萬", "7man": "7萬", "8man": "8萬", "9man": "9萬",
+    # 筒
+    "1p": "1筒", "2p": "2筒", "3p": "3筒", "4p": "4筒", "5p": "5筒", "6p": "6筒", "7p": "7筒", "8p": "8筒", "9p": "9筒",
+    "1pin": "1筒", "2pin": "2筒", "3pin": "3筒", "4pin": "4筒", "5pin": "5筒", "6pin": "6筒", "7pin": "7筒", "8pin": "8筒", "9pin": "9筒",
+    # 條
+    "1s": "1條", "2s": "2條", "3s": "3條", "4s": "4條", "5s": "5條", "6s": "6條", "7s": "7條", "8s": "8條", "9s": "9條",
+    "1sou": "1條", "2sou": "2條", "3sou": "3條", "4sou": "4條", "5sou": "5條", "6sou": "6條", "7sou": "7條", "8sou": "8條", "9sou": "9條",
+    # 字
+    "E": "東", "east": "東", "ton": "東",
+    "S": "南", "south": "南", "nan": "南",
+    "W": "西", "west": "西", "sha": "西",
+    "N": "北", "north": "北", "pei": "北",
+    "C": "中", "chun": "中", "red": "中", "zhong": "中",
+    "F": "發", "fa": "發", "hatsu": "發", "green": "發",
+    "B": "白", "bai": "白", "haku": "白", "white": "白",
+    # 花
+    "flower": "春"
+}
 
+# ⚠️ 請在此填入你的 Roboflow Private API Key
+ROBOFLOW_API_KEY = "你的_ROBOFLOW_API_KEY_放在這裡" 
+MODEL_ID = "mahjong-baq4s/83"
+
+# ==========================================
+# 4. 邏輯函式 (新增/刪除/AI)
+# ==========================================
+
+# ==========================================
+# 修改後的函式 (使用 requests，不依賴 inference-sdk)
+# ==========================================
+
+
+def call_roboflow_api(image_file):
+    # 組合 API 網址
+    # 格式: https://detect.roboflow.com/{model_id}?api_key={api_key}&confidence={信心度}
+    api_url = f"https://detect.roboflow.com/{MODEL_ID}?api_key={ROBOFLOW_API_KEY}&confidence=40&overlap=30&format=json"
+
+    # 讀取圖片的二進位資料
+    image_bytes = image_file.getvalue()
+
+    try:
+        # 直接發送 POST 請求
+        response = requests.post(
+            api_url,
+            data=image_bytes,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+        )
+        
+        # 檢查回應狀態
+        if response.status_code != 200:
+            st.error(f"API 呼叫失敗 (代碼 {response.status_code}): {response.text}")
+            return []
+
+        result = response.json()
+
+        # 解析結果 (格式與 SDK 略有不同，這裡是原始 JSON)
+        if 'predictions' in result:
+            predictions = result['predictions']
+            
+            # 依 x 軸排序 (由左到右)
+            predictions.sort(key=lambda x: x['x'])
+            
+            detected_tiles = []
+            for p in predictions:
+                raw = p['class']
+                app_name = API_MAPPING.get(raw, raw)
+                
+                # 簡單過濾合法牌名
+                if "萬" in app_name or "筒" in app_name or "條" in app_name or app_name in TILES["字"] or app_name in TILES["花"]:
+                    detected_tiles.append(app_name)
+            return detected_tiles
+        return []
+
+    except Exception as e:
+        raise e
 def get_total_count():
-    # 計算目前牌數：手牌 + 明牌*3 + 胡牌
-    # 這裡簡化計算：每個明牌組視為佔用3張空間
+    # 計算總張數 (明牌算3張)
     count = len(st.session_state.hand_tiles)
     count += len(st.session_state.exposed_tiles) * 3
     if st.session_state.winning_tile:
@@ -75,29 +170,27 @@ def get_total_count():
 def add_tile(tile, category):
     mode = st.session_state.input_mode
     
-    # === 花牌處理 (獨立) ===
+    # 花牌獨立處理
     if category == "花":
         if tile in st.session_state.flower_tiles:
-            st.toast(f"⚠️ 花牌「{tile}」重複！")
-            return
-        st.session_state.flower_tiles.append(tile)
-        st.toast(f"🌸 新增：{tile}")
+            st.toast(f"⚠️ {tile} 重複", icon="🚫")
+        else:
+            st.session_state.flower_tiles.append(tile)
+            st.toast(f"🌸 新增：{tile}")
         return
 
-    # === 檢查總張數上限 ===
+    # 檢查張數上限
     if get_total_count() >= 17:
-        st.toast("⚠️ 牌數已滿 (17張)！請先刪除。", icon="🛑")
+        st.toast("⚠️ 牌數已滿 (17張)！", icon="🛑")
         return
 
-    # === 模式 A: 新增手牌 ===
+    # 模式 A: 手牌
     if mode == '手牌':
-        # 檢查手牌內重複 (最多4張)
         current_hand = st.session_state.hand_tiles + ([st.session_state.winning_tile] if st.session_state.winning_tile else [])
         if current_hand.count(tile) >= 4:
             st.toast("⚠️ 手牌已達4張上限")
             return
             
-        # 判斷是加入手牌還是成為胡牌
         if get_total_count() < 16:
             st.session_state.hand_tiles.append(tile)
         elif get_total_count() == 16:
@@ -105,42 +198,31 @@ def add_tile(tile, category):
         else:
             st.toast("牌數已滿")
 
-    # === 模式 B: 新增 碰/槓 (明牌) ===
+    # 模式 B: 碰/槓
     elif mode == '碰/槓':
-        # 碰需要該牌剩餘張數足夠
-        # 這裡簡化檢查，直接加入
-        new_set = {"type": "碰", "tiles": [tile, tile, tile]}
-        st.session_state.exposed_tiles.append(new_set)
+        st.session_state.exposed_tiles.append({"type": "碰", "tiles": [tile]*3})
         st.toast(f"⬇️ 碰：{tile}")
-        st.session_state.input_mode = '手牌' # 自動切回手牌模式方便操作
+        st.session_state.input_mode = '手牌'
 
-    # === 模式 C: 新增 吃 (明牌) ===
+    # 模式 C: 吃
     elif mode == '吃':
-        # 邏輯：點擊的是順子的「第一張」 (例如點 2萬 -> 吃 234萬)
         if category == "字":
             st.toast("❌ 字牌不能吃")
             return
-        
         try:
             num = int(tile[:-1])
             suit = tile[-1]
             if num > 7:
-                st.toast(f"❌ {tile} 無法當作順子開頭 (最大只能吃到 789)")
+                st.toast(f"❌ {tile} 不能當順子開頭")
                 return
-            
-            t1 = f"{num}{suit}"
-            t2 = f"{num+1}{suit}"
-            t3 = f"{num+2}{suit}"
-            
-            new_set = {"type": "吃", "tiles": [t1, t2, t3]}
-            st.session_state.exposed_tiles.append(new_set)
+            t1, t2, t3 = f"{num}{suit}", f"{num+1}{suit}", f"{num+2}{suit}"
+            st.session_state.exposed_tiles.append({"type": "吃", "tiles": [t1, t2, t3]})
             st.toast(f"⬇️ 吃：{t1}{t2}{t3}")
             st.session_state.input_mode = '手牌'
         except:
-            st.toast("❌ 格式錯誤")
+            pass
 
 def remove_last_item():
-    # 優先移除胡牌 -> 手牌 -> 最後才是明牌
     if st.session_state.winning_tile:
         st.session_state.winning_tile = None
     elif st.session_state.hand_tiles:
@@ -155,10 +237,12 @@ def reset_game():
     st.session_state.exposed_tiles = []
     st.session_state.input_mode = '手牌'
 
-# --- 5. 核心演算法 (平胡與胡牌判斷) ---
+# ==========================================
+# 5. 核心演算法 (台數計算)
+# ==========================================
 
 def try_remove_sets(counts):
-    """遞迴：檢查是否能組成 3+3+3...+2"""
+    """遞迴檢查：剩下的是否全為面子(刻子或順子)"""
     available = sorted([t for t in counts if counts[t] > 0])
     if not available: return True
     first = available[0]
@@ -168,7 +252,6 @@ def try_remove_sets(counts):
         counts[first] -= 3
         if try_remove_sets(counts): return True
         counts[first] += 3
-        
     # 試順子 (無字)
     if "字" not in first:
         try:
@@ -184,8 +267,7 @@ def try_remove_sets(counts):
 
 def check_standard_hu(counts):
     """標準胡牌：5面子+1眼"""
-    if sum(counts.values()) % 3 != 2: return False # 剩餘牌數必須是 3N+2
-    
+    if sum(counts.values()) % 3 != 2: return False
     for tile in counts:
         if counts[tile] >= 2:
             counts[tile] -= 2
@@ -196,7 +278,7 @@ def check_standard_hu(counts):
     return False
 
 def check_seven_pairs(counts, exposed_len):
-    """七對子：不能有明牌"""
+    """七對子"""
     if exposed_len > 0: return False
     if sum(counts.values()) != 17: return False
     pairs = 0
@@ -205,45 +287,11 @@ def check_seven_pairs(counts, exposed_len):
         elif counts[t] == 4: pairs += 2
     return pairs == 8
 
-def check_ping_hu(counts, flowers, exposed_list):
-    """
-    平胡檢查 (嚴格版)：
-    1. 無花
-    2. 無字 (手牌與明牌都不能有字)
-    3. 無碰/槓 (明牌區不能有碰，手牌區不能有刻子)
-    4. 手牌必須全順子
-    5. 必須聽雙頭 (這裡假設成立，顯示時備註)
-    """
-    # 1. 無花
-    if flowers: return False
-    
-    # 2. 明牌區檢查
-    for item in exposed_list:
-        if item['type'] == '碰': return False # 平胡不可有碰
-        for t in item['tiles']:
-            if "字" in t: return False # 平胡不可有字
-            
-    # 3. 手牌區檢查 (無字)
-    for t in counts:
-        if "字" in t: return False
-        
-    # 4. 手牌結構檢查：必須是 1眼 + 全順子 (不能有刻子)
-    # 邏輯：嘗試拔掉每一種眼，剩下的必須能「只用順子」組完
-    for tile in counts:
-        if counts[tile] >= 2:
-            temp = counts.copy()
-            temp[tile] -= 2
-            if can_form_only_sequences(temp):
-                return True
-    return False
-
 def can_form_only_sequences(counts):
-    """遞迴：剩下的牌只能組順子"""
+    """遞迴：剩下的只能組順子"""
     available = sorted([t for t in counts if counts[t] > 0])
     if not available: return True
     first = available[0]
-    
-    # 強制順子邏輯
     try:
         num = int(first[:-1])
         suit = first[-1]
@@ -255,49 +303,70 @@ def can_form_only_sequences(counts):
     except: pass
     return False
 
+def check_ping_hu(counts, flowers, exposed_list):
+    """平胡：無花、無字、無刻(手牌全順)、明牌無碰"""
+    if flowers: return False
+    for item in exposed_list:
+        if item['type'] == '碰': return False
+        for t in item['tiles']:
+            if "字" in t: return False
+    for t in counts:
+        if "字" in t: return False
+    
+    # 檢查手牌去掉眼後，是否全順子
+    for tile in counts:
+        if counts[tile] >= 2:
+            temp = counts.copy()
+            temp[tile] -= 2
+            if can_form_only_sequences(temp):
+                return True
+    return False
+
+def check_only_triplets_remain(counts):
+    """檢查手牌是否全為刻子+1眼 (用於碰碰胡)"""
+    for tile in counts:
+        if counts[tile] >= 2:
+            temp = counts.copy()
+            temp[tile] -= 2
+            # 檢查剩下的能否全被3整除 (簡易判斷，嚴謹需遞迴)
+            if all(temp[t] % 3 == 0 for t in temp):
+                return True
+    return False
+
 def calculate_tai():
     hand = st.session_state.hand_tiles + ([st.session_state.winning_tile] if st.session_state.winning_tile else [])
     exposed_sets = st.session_state.exposed_tiles
     flowers = st.session_state.flower_tiles
     settings = st.session_state.settings
     
-    # 門清狀態：若有明牌，強制非門清
     is_actually_men_qing = (len(exposed_sets) == 0)
-    
     counts = Counter(hand)
     details = []
     total_tai = 0
     
-    # 1. 胡牌判斷
+    # 1. 胡牌判定
     is_seven = check_seven_pairs(counts, len(exposed_sets))
-    is_standard = check_standard_hu(counts.copy()) # 只檢查手牌部分能否湊成面子
+    is_standard = check_standard_hu(counts.copy())
     
     if not (is_seven or is_standard):
         return 0, ["❌ 尚未胡牌 (手牌未湊齊)"]
 
-    # 2. 算台邏輯
-    
-    # --- 碰碰胡偵測 ---
-    # 定義：所有面子都是刻子 (包含明牌的碰 和 手牌的刻)
+    # 2. 牌型台數
     is_peng_peng = False
-    if is_standard:
-        # 檢查明牌是否全為碰
-        exposed_all_pong = all(item['type'] == '碰' for item in exposed_sets)
-        if exposed_all_pong:
-            # 檢查手牌去掉眼後，是否全為刻子
-            # 這裡簡化：若能胡且無順子結構，大機率是碰碰胡 (嚴格來說要寫遞迴check only triplets)
-            # 為了效能，這裡暫時假設：如果不是平胡，且明牌都是碰，且手牌無明顯順子(這裡難判斷)，就判斷碰碰胡？
-            # 修正：寫一個 check_only_triplets 比較保險
-            is_peng_peng = check_only_triplets_remain(counts.copy())
-            
-    # --- 平胡偵測 ---
     is_ping_hu = False
+
+    # 碰碰胡
+    if is_standard:
+        exposed_all_pong = all(item['type'] == '碰' for item in exposed_sets)
+        if exposed_all_pong and check_only_triplets_remain(counts.copy()):
+            is_peng_peng = True
+
+    # 平胡 (若非碰碰胡)
     if is_standard and not is_peng_peng:
         if check_ping_hu(counts.copy(), flowers, exposed_sets):
             is_ping_hu = True
 
-    # --- 花色判斷 ---
-    # 收集手牌 + 明牌的所有花色
+    # 3. 花色判定
     all_tiles = hand + [t for s in exposed_sets for t in s['tiles']]
     suits = set()
     has_honors = False
@@ -308,276 +377,179 @@ def calculate_tai():
         else: has_honors = True
 
     if len(suits) == 0 and has_honors:
-        details.append("字一色 (16台)")
-        total_tai += 16
+        details.append("字一色 (16台)"); total_tai += 16
     elif len(suits) == 1 and not has_honors:
-        details.append("清一色 (8台)")
-        total_tai += 8
+        details.append("清一色 (8台)"); total_tai += 8
     elif len(suits) == 1 and has_honors:
-        details.append("混一色 (4台)")
-        total_tai += 4
+        details.append("混一色 (4台)"); total_tai += 4
 
-    # --- 牌型台數 ---
+    # 4. 加總牌型
     if is_seven:
-        details.append("七對子 (8台)")
-        total_tai += 8
+        details.append("七對子 (8台)"); total_tai += 8
     elif is_peng_peng:
-        details.append("碰碰胡 (4台)")
-        total_tai += 4
+        details.append("碰碰胡 (4台)"); total_tai += 4
     elif is_ping_hu:
-        details.append("平胡 (2台) *非獨聽")
-        total_tai += 2
-        
-    # --- 三元牌與風牌 ---
-    # 需統計手牌 + 明牌
-    total_counts = Counter(all_tiles)
-    for dragon in ["中", "發", "白"]:
-        if total_counts[dragon] >= 3:
-            details.append(f"{dragon}刻 (1台)")
-            total_tai += 1
-    if total_counts[settings['wind_round']] >= 3:
-        details.append(f"圈風{settings['wind_round']} (1台)")
-        total_tai += 1
-    if total_counts[settings['wind_seat']] >= 3:
-        details.append(f"門風{settings['wind_seat']} (1台)")
-        total_tai += 1
+        details.append("平胡 (2台) *假設非獨聽"); total_tai += 2
 
-    # --- 狀態台數 (門清/自摸) ---
-    # 門清條件：無明牌
+    # 5. 三元牌與風牌
+    total_counts = Counter(all_tiles)
+    for d in ["中", "發", "白"]:
+        if total_counts[d] >= 3:
+            details.append(f"{d}刻 (1台)"); total_tai += 1
+    if total_counts[settings['wind_round']] >= 3:
+        details.append(f"圈風{settings['wind_round']} (1台)"); total_tai += 1
+    if total_counts[settings['wind_seat']] >= 3:
+        details.append(f"門風{settings['wind_seat']} (1台)"); total_tai += 1
+
+    # 6. 狀態台數
     if is_actually_men_qing:
         if settings['is_self_draw']:
-            details.append("門清自摸 (3台)") # 1+1+1
-            total_tai += 3
+            details.append("門清自摸 (3台)"); total_tai += 3
         else:
-            # 只有門清，沒自摸
-            details.append("門清 (1台)")
-            total_tai += 1
+            details.append("門清 (1台)"); total_tai += 1
     else:
-        # 非門清，只有自摸算台
         if settings['is_self_draw']:
-            details.append("自摸 (1台)")
-            total_tai += 1
+            details.append("自摸 (1台)"); total_tai += 1
 
-    # --- 花牌 ---
+    # 7. 花牌
     if flowers:
-        details.append(f"花牌 x{len(flowers)} ({len(flowers)}台)")
-        total_tai += len(flowers)
+        details.append(f"花牌x{len(flowers)} ({len(flowers)}台)"); total_tai += len(flowers)
 
-    if total_tai == 0:
-        details.append("一般胡牌 (屁胡)")
-
+    if total_tai == 0: details.append("一般胡牌 (屁胡)")
     return total_tai, details
 
-def check_only_triplets_remain(counts):
-    """檢查手牌是否全為刻子+1眼"""
-    # 拔眼
-    for tile in counts:
-        if counts[tile] >= 2:
-            temp = counts.copy()
-            temp[tile] -= 2
-            # 剩下的必須全都能被3整除 (簡單檢查)
-            if all(temp[t] % 3 == 0 for t in temp):
-                return True
-    return False
-
-# --- 6. UI 介面 ---
+# ==========================================
+# 6. UI 介面
+# ==========================================
 
 st.title("🀄 台麻計算機 (Pro)")
 
-# === 區塊 A: 狀態顯示 ===
+# === A. AI 辨識區塊 ===
+with st.expander("📸 AI 拍照辨識 (Roboflow API)", expanded=False):
+    st.caption("使用模型: mahjong-baq4s/83")
+    img_file = st.camera_input("請將牌排成一列拍攝")
+    
+    if img_file and st.button("🚀 傳送辨識", type="primary"):
+        if "你的_ROBOFLOW_API_KEY" in ROBOFLOW_API_KEY:
+            st.error("❌ 請在程式碼中填入正確的 API Key")
+        else:
+            with st.spinner("☁️ AI 運算中..."):
+                try:
+                    result_list = call_roboflow_api(img_file)
+                    if result_list:
+                        st.success(f"成功辨識 {len(result_list)} 張")
+                        st.write("結果：", " ".join(result_list))
+                        
+                        col_auto1, col_auto2 = st.columns(2)
+                        if col_auto1.button("📥 全部填入 (含胡)"):
+                            reset_game()
+                            if len(result_list) > 1:
+                                st.session_state.winning_tile = result_list[-1]
+                                st.session_state.hand_tiles = result_list[:-1]
+                            else:
+                                st.session_state.hand_tiles = result_list
+                            st.rerun()
+                        if col_auto2.button("📥 僅填手牌"):
+                            reset_game()
+                            st.session_state.hand_tiles = result_list
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ 未偵測到麻將牌")
+                except Exception as e:
+                    st.error(f"API 錯誤: {e}")
+
+# === B. 狀態顯示 ===
 with st.container(border=True):
-    # 1. 顯示胡的那張
     c1, c2 = st.columns([3, 1])
     c1.subheader("🖐️ 胡牌")
     if st.session_state.winning_tile:
-        c2.button(st.session_state.winning_tile, key="win_btn", type="primary")
+        c2.button(st.session_state.winning_tile, key="w_btn", type="primary")
     else:
         c2.button("?", disabled=True)
     
-    st.divider()
-    
-    # 2. 明牌區 (吃碰槓)
     if st.session_state.exposed_tiles:
-        st.caption("🔽 明牌區 (落地)")
-        cols_ex = st.columns(4)
-        for i, item in enumerate(st.session_state.exposed_tiles):
-            label = "".join(item['tiles'])
-            cols_ex[i % 4].info(f"{label}")
         st.divider()
-
-    # 3. 手牌區 (暗牌)
+        st.caption("🔽 明牌區 (吃/碰/槓)")
+        e_cols = st.columns(4)
+        for i, item in enumerate(st.session_state.exposed_tiles):
+            e_cols[i%4].info("".join(item['tiles']))
+            
+    st.divider()
     st.subheader(f"🎴 手牌 (暗) {len(st.session_state.hand_tiles)}張")
     sorted_hand = sorted(st.session_state.hand_tiles)
     if sorted_hand:
-        tiles_per_row = 8 
-        num_rows = math.ceil(len(sorted_hand) / tiles_per_row)
-        for r in range(num_rows):
+        tiles_per_row = 8
+        rows = math.ceil(len(sorted_hand)/tiles_per_row)
+        for r in range(rows):
             cols = st.columns(tiles_per_row)
             for i in range(tiles_per_row):
-                idx = r * tiles_per_row + i
+                idx = r*tiles_per_row + i
                 if idx < len(sorted_hand):
                     cols[i].button(sorted_hand[idx], key=f"h_{idx}", disabled=True)
     else:
         st.info("請輸入手牌")
-
-    # 4. 花牌
+        
     if st.session_state.flower_tiles:
         st.divider()
         st.write(f"🌸 花: {' '.join(st.session_state.flower_tiles)}")
 
-# === 區塊 B: 輸入模式切換 (關鍵) ===
-# ==========================================
-# [新增功能] 📸 AI 拍照辨識模組
-# ==========================================
-import base64
-from PIL import Image
-import io
-
-# 模擬的 AI 辨識結果 (當沒有 API Key 時使用)
-def mock_ai_recognition(image_bytes):
-    """
-    這裡模擬 AI 看到了什麼。
-    實際專案中，這裡會呼叫 OpenAI GPT-4o 或 YOLO 模型。
-    """
-    import time
-    time.sleep(1.5) # 模擬運算時間
-    # 假設 AI 辨識出一副聽牌
-    return {
-        "hand": ["1萬", "2萬", "3萬", "4筒", "5筒", "6筒", "7條", "8條", "9條", "東", "東", "發", "發"],
-        "exposed": [], # 假設沒拍到吃碰
-        "winning": "發" # 假設最後一張是發
-    }
-
-# 真實的 OpenAI GPT-4o 呼叫範本 (需填入 API Key)
-def call_gpt4o_vision(image_bytes):
-    # import openai
-    # client = openai.OpenAI(api_key="你的_OPENAI_API_KEY")
-    # base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    # response = client.chat.completions.create(
-    #     model="gpt-4o",
-    #     messages=[
-    #         {
-    #             "role": "user",
-    #             "content": [
-    #                 {"type": "text", "text": "Identify all mahjong tiles in this image. Return JSON format with keys: 'hand_tiles' (list of strings like '1萬', '2筒', '東'), 'exposed_tiles' (list of lists for pong/chow), and 'winning_tile' (string or null). Only return JSON."},
-    #                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-    #             ]
-    #         }
-    #     ],
-    #     response_format={"type": "json_object"}
-    # )
-    # return json.loads(response.choices[0].message.content)
-    return mock_ai_recognition(image_bytes) # 暫時用模擬的
-
-with st.expander("📸 AI 拍照自動填入 (Beta)", expanded=False):
-    st.info("💡 提示：請將牌排成一列，光線充足，避免反光。")
-    
-    # 啟動相機
-    img_file = st.camera_input("點擊拍照")
-    
-    if img_file is not None:
-        # 顯示預覽
-        # st.image(img_file, caption="已拍攝", width=300)
-        
-        if st.button("🚀 開始 AI 辨識", type="primary"):
-            with st.spinner("🤖 AI 正在看這張照片... (模擬中)"):
-                try:
-                    # 讀取圖片 bytes
-                    bytes_data = img_file.getvalue()
-                    
-                    # === 呼叫 AI 核心 ===
-                    result = mock_ai_recognition(bytes_data) 
-                    # 如果你有 API Key，改成: result = call_gpt4o_vision(bytes_data)
-                    # ===================
-
-                    # 解析結果並填入 Session State
-                    if result:
-                        # 1. 清空目前狀態
-                        reset_game()
-                        
-                        # 2. 填入手牌
-                        st.session_state.hand_tiles = result.get("hand", [])
-                        
-                        # 3. 填入明牌 (如果有的話)
-                        # 格式轉換: AI回傳的可能是單純 list，需轉成我們的 [{"type":"碰", "tiles":...}] 結構
-                        # 這裡暫時略過複雜轉換，假設 AI 很聰明直接回傳對的格式
-                        
-                        # 4. 填入胡牌
-                        st.session_state.winning_tile = result.get("winning")
-                        
-                        st.success("✅ 辨識成功！已自動填入。")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"辨識失敗：{e}")
-
-# ==========================================
-# [結束] AI 拍照模組
-# ==========================================
+# === C. 輸入區 ===
 st.write("---")
-mode_cols = st.columns(3)
-mode_options = ["手牌", "吃", "碰/槓"]
-st.session_state.input_mode = st.radio("👇 選擇輸入模式：", mode_options, horizontal=True, label_visibility="collapsed")
+mode_list = ["手牌", "吃", "碰/槓"]
+st.session_state.input_mode = st.radio("👇 輸入模式", mode_list, horizontal=True, label_visibility="collapsed")
 
-if st.session_state.input_mode == "吃":
-    st.caption("💡 提示：點擊「2萬」會自動加入「234萬」")
-elif st.session_state.input_mode == "碰/槓":
-    st.caption("💡 提示：點擊「中」會自動加入「中中中」")
+if st.session_state.input_mode == "吃": st.caption("💡 點擊「2萬」自動加入「234萬」")
+elif st.session_state.input_mode == "碰/槓": st.caption("💡 點擊牌自動加入三張")
 
-# === 區塊 C: 牌型鍵盤 ===
-tab_names = ["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"]
-tabs = st.tabs(tab_names)
+tabs = st.tabs(["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"])
 
-def render_numpad(tiles, category_key):
-    for row in range(3):
+def render_pad(tiles, key_cat):
+    for r in range(3):
         cols = st.columns(3)
-        for col in range(3):
-            idx = row * 3 + col
+        for c in range(3):
+            idx = r*3 + c
             if idx < len(tiles):
-                tile = tiles[idx]
-                if cols[col].button(tile, key=f"btn_{category_key}_{tile}"):
-                    add_tile(tile, category_key)
+                t = tiles[idx]
+                if cols[c].button(t, key=f"b_{key_cat}_{t}"):
+                    add_tile(t, key_cat)
                     st.rerun()
 
-with tabs[0]: render_numpad(TILES["萬"], "萬")
-with tabs[1]: render_numpad(TILES["筒"], "筒")
-with tabs[2]: render_numpad(TILES["條"], "條")
+with tabs[0]: render_pad(TILES["萬"], "萬")
+with tabs[1]: render_pad(TILES["筒"], "筒")
+with tabs[2]: render_pad(TILES["條"], "條")
 with tabs[3]: 
-    c1 = st.columns(4); 
+    c1=st.columns(4); 
     for i in range(4): 
-        t=TILES["字"][i]
-        if c1[i].button(t): add_tile(t,"字"); st.rerun()
-    c2 = st.columns(4)
+        if c1[i].button(TILES["字"][i]): add_tile(TILES["字"][i],"字"); st.rerun()
+    c2=st.columns(4); 
     for i in range(4,7): 
-        t=TILES["字"][i]
-        if c2[i-4].button(t): add_tile(t,"字"); st.rerun()
+        if c2[i-4].button(TILES["字"][i]): add_tile(TILES["字"][i],"字"); st.rerun()
 with tabs[4]:
-    c1 = st.columns(4)
+    c1=st.columns(4)
     for i in range(8):
-        t = TILES["花"][i]
-        if c1[i%4].button(t): add_tile(t, "花"); st.rerun()
+        if c1[i%4].button(TILES["花"][i]): add_tile(TILES["花"][i],"花"); st.rerun()
 
-# === 區塊 D: 控制與計算 ===
+# === D. 控制與結算 ===
 st.write("---")
-c_ctrl1, c_ctrl2 = st.columns(2)
-if c_ctrl1.button("⬅️ 退回"): remove_last_item(); st.rerun()
-if c_ctrl2.button("🗑️ 清空", type="primary"): reset_game(); st.rerun()
+cc1, cc2 = st.columns(2)
+if cc1.button("⬅️ 退回"): remove_last_item(); st.rerun()
+if cc2.button("🗑️ 清空", type="primary"): reset_game(); st.rerun()
 
-with st.expander("⚙️ 設定 (自摸/風位)", expanded=True):
+with st.expander("⚙️ 圈風 / 門風 / 自摸", expanded=True):
     st.session_state.settings['is_self_draw'] = st.toggle("自摸", value=st.session_state.settings['is_self_draw'])
-    c1, c2 = st.columns(2)
-    st.session_state.settings['wind_round'] = c1.selectbox("圈風", ["東", "南", "西", "北"])
-    st.session_state.settings['wind_seat'] = c2.selectbox("門風", ["東", "南", "西", "北"])
+    sc1, sc2 = st.columns(2)
+    st.session_state.settings['wind_round'] = sc1.selectbox("圈風", ["東","南","西","北"])
+    st.session_state.settings['wind_seat'] = sc2.selectbox("門風", ["東","南","西","北"])
 
-if st.button("🧮 計算台數", type="primary"):
-    total_cnt = get_total_count()
-    if total_cnt != 17:
-        st.error(f"❌ 牌數錯誤：目前 {total_cnt} 張 (應為 17)")
+if st.button("🧮 開始計算", type="primary"):
+    total_c = get_total_count()
+    if total_c != 17:
+        st.error(f"❌ 牌數錯誤：目前 {total_c} 張 (應為 17)")
     else:
-        score, details = calculate_tai()
-        if "❌" in details[0]:
-            st.error(details[0])
+        score, lines = calculate_tai()
+        if "❌" in lines[0]:
+            st.error(lines[0])
         else:
             st.balloons()
             st.success(f"### 總計：{score} 台")
-            for d in details:
-                st.info(d)
+            for l in lines: st.info(l)
