@@ -42,7 +42,7 @@ st.markdown("""
 # ==========================================
 # ⚠️ 請將你的 Key 填入下方引號中
 ROBOFLOW_API_KEY = "dKsZfGd1QysNKSoaIT1m" 
-MODEL_ID = "mahjong-baq4s/4"
+MODEL_ID = "mahjong-baq4s/1"
 
 # ==========================================
 # 3. 初始化 Session State
