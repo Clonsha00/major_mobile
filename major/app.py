@@ -3,7 +3,7 @@ from collections import Counter
 import math
 import tempfile
 import os
-import requests  # 使用 requests 取代 inference-sdk
+import requests 
 
 # ==========================================
 # 1. 設定與 CSS 優化
@@ -38,11 +38,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. API 設定 (請在此填入你的 Key)
+# 2. API 設定 (已填入你的資料)
 # ==========================================
-# ⚠️ 請將你的 Key 填入下方引號中
-ROBOFLOW_API_KEY = "dKsZfGd1QysNKSoaIT1m" 
-MODEL_ID = "mahjong-baq4s/1"
+ROBOFLOW_API_KEY = "rf_4Ywzw4lfTsVYGxr774IWjnYg8XU2"
+MODEL_ID = "mahjong-baq4s-c3ovv/1"
 
 # ==========================================
 # 3. 初始化 Session State
@@ -75,22 +74,27 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# API 回傳標籤對應表
+# 專屬 mahjong-baq4s 資料集的對應表
 API_MAPPING = {
-    "1m": "1萬", "2m": "2萬", "3m": "3萬", "4m": "4萬", "5m": "5萬", "6m": "6萬", "7m": "7萬", "8m": "8萬", "9m": "9萬",
-    "1man": "1萬", "2man": "2萬", "3man": "3萬", "4man": "4萬", "5man": "5萬", "6man": "6萬", "7man": "7萬", "8man": "8萬", "9man": "9萬",
-    "1p": "1筒", "2p": "2筒", "3p": "3筒", "4p": "4筒", "5p": "5筒", "6p": "6筒", "7p": "7筒", "8p": "8筒", "9p": "9筒",
-    "1pin": "1筒", "2pin": "2筒", "3pin": "3筒", "4pin": "4筒", "5pin": "5筒", "6pin": "6筒", "7pin": "7筒", "8pin": "8筒", "9pin": "9筒",
-    "1s": "1條", "2s": "2條", "3s": "3條", "4s": "4條", "5s": "5條", "6s": "6條", "7s": "7條", "8s": "8條", "9s": "9條",
-    "1sou": "1條", "2sou": "2條", "3sou": "3條", "4sou": "4條", "5sou": "5條", "6sou": "6條", "7sou": "7條", "8sou": "8條", "9sou": "9條",
-    "E": "東", "east": "東", "ton": "東",
-    "S": "南", "south": "南", "nan": "南",
-    "W": "西", "west": "西", "sha": "西",
-    "N": "北", "north": "北", "pei": "北",
-    "C": "中", "chun": "中", "red": "中", "zhong": "中",
-    "F": "發", "fa": "發", "hatsu": "發", "green": "發",
-    "B": "白", "bai": "白", "haku": "白", "white": "白",
-    "flower": "春"
+    # === 萬子 (Characters) ===
+    "1C": "1萬", "2C": "2萬", "3C": "3萬", "4C": "4萬", "5C": "5萬", "6C": "6萬", "7C": "7萬", "8C": "8萬", "9C": "9萬",
+    
+    # === 筒子 (Dots) ===
+    "1D": "1筒", "2D": "2筒", "3D": "3筒", "4D": "4筒", "5D": "5筒", "6D": "6筒", "7D": "7筒", "8D": "8筒", "9D": "9筒",
+    
+    # === 條子 (Bamboo/Sticks) ===
+    "1B": "1條", "2B": "2條", "3B": "3條", "4B": "4條", "5B": "5條", "6B": "6條", "7B": "7條", "8B": "8條", "9B": "9條",
+    "1S": "1條", "2S": "2條", "3S": "3條", "4S": "4條", "5S": "5條", "6S": "6條", "7S": "7條", "8S": "8條", "9S": "9條",
+    
+    # === 風牌 ===
+    "EW": "東", "SW": "南", "WW": "西", "NW": "北",
+    
+    # === 三元牌 ===
+    "RD": "中", "GD": "發", "WD": "白",
+    
+    # === 花牌 ===
+    "1F": "花", "2F": "花", "3F": "花", "4F": "花", 
+    "5F": "花", "6F": "花", "7F": "花", "8F": "花"
 }
 
 # ==========================================
@@ -98,16 +102,24 @@ API_MAPPING = {
 # ==========================================
 
 def call_roboflow_api(image_file):
-    """使用 requests 直接呼叫 API，無需安裝 SDK"""
-    # 建構 API 網址
-    api_url = f"https://detect.roboflow.com/{MODEL_ID}?api_key={ROBOFLOW_API_KEY}&confidence=40&overlap=30&format=json"
+    """使用 requests 直接呼叫 API (multipart/form-data)"""
+    upload_url = "".join([
+        "https://detect.roboflow.com/",
+        MODEL_ID,
+        "?api_key=", ROBOFLOW_API_KEY,
+        "&confidence=40&overlap=30&format=json"
+    ])
 
     try:
-        # 發送 POST 請求
+        # 使用 multipart 上傳圖片，避免 500 錯誤
+        filename = getattr(image_file, 'name', 'image.jpg')
+        file_bytes = image_file.getvalue()
+        
         response = requests.post(
-            api_url,
-            data=image_file.getvalue(),
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
+            upload_url,
+            files={
+                "file": (filename, file_bytes, "image/jpeg")
+            }
         )
         
         if response.status_code != 200:
@@ -132,7 +144,8 @@ def call_roboflow_api(image_file):
         return []
 
     except Exception as e:
-        raise e
+        st.error(f"連線錯誤: {e}")
+        return []
 
 def get_total_count():
     count = len(st.session_state.hand_tiles)
@@ -289,8 +302,15 @@ def calculate_tai():
     
     if is_standard:
         exposed_all_pong = all(item['type'] == '碰' for item in exposed_sets)
-        # 簡易判斷碰碰胡 (嚴謹應檢查剩餘是否全刻子)
-        is_peng_peng = exposed_all_pong and not check_ping_hu(counts.copy(), [], [])
+        # 簡易判斷碰碰胡
+        for tile in counts:
+            if counts[tile] >= 2:
+                temp = counts.copy()
+                temp[tile] -= 2
+                # 檢查剩下是否全被3整除
+                if all(temp[t] % 3 == 0 for t in temp) and exposed_all_pong:
+                    is_peng_peng = True
+                    break
         
     if is_standard and not is_peng_peng:
         if check_ping_hu(counts.copy(), flowers, exposed_sets):
@@ -337,34 +357,31 @@ def calculate_tai():
 st.title("🀄 台麻計算機 (AI版)")
 
 with st.expander("📸 AI 拍照辨識", expanded=False):
-    st.caption("使用雲端模型: mahjong-baq4s/83")
+    st.caption(f"目前模型: {MODEL_ID}")
     img_file = st.camera_input("請將牌排成一列拍攝")
     
     if img_file and st.button("🚀 傳送辨識", type="primary"):
         with st.spinner("☁️ AI 運算中..."):
-            try:
-                result_list = call_roboflow_api(img_file)
-                if result_list:
-                    st.success(f"成功辨識 {len(result_list)} 張")
-                    st.write("結果：", " ".join(result_list))
-                    
-                    c1, c2 = st.columns(2)
-                    if c1.button("📥 全部填入 (含胡)"):
-                        reset_game()
-                        if len(result_list) > 1:
-                            st.session_state.winning_tile = result_list[-1]
-                            st.session_state.hand_tiles = result_list[:-1]
-                        else:
-                            st.session_state.hand_tiles = result_list
-                        st.rerun()
-                    if c2.button("📥 僅填手牌"):
-                        reset_game()
+            result_list = call_roboflow_api(img_file)
+            if result_list:
+                st.success(f"成功辨識 {len(result_list)} 張")
+                st.write("結果：", " ".join(result_list))
+                
+                c1, c2 = st.columns(2)
+                if c1.button("📥 全部填入 (含胡)"):
+                    reset_game()
+                    if len(result_list) > 1:
+                        st.session_state.winning_tile = result_list[-1]
+                        st.session_state.hand_tiles = result_list[:-1]
+                    else:
                         st.session_state.hand_tiles = result_list
-                        st.rerun()
-                else:
-                    st.warning("⚠️ 未偵測到牌，請靠近一點或調整光線")
-            except Exception as e:
-                st.error(f"錯誤: {e}")
+                    st.rerun()
+                if c2.button("📥 僅填手牌"):
+                    reset_game()
+                    st.session_state.hand_tiles = result_list
+                    st.rerun()
+            else:
+                st.warning("⚠️ 未偵測到牌，請確認模型是否已部屬 (Deployed) 且照片清晰。")
 
 # Dashboard
 with st.container(border=True):
