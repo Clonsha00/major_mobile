@@ -358,32 +358,48 @@ def calculate_tai():
 
 st.title("🀄 台麻計算機 (AI版)")
 
-with st.expander("📸 AI 拍照辨識", expanded=False):
+# === A. AI 辨識區塊 (新增上傳功能) ===
+with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     st.caption(f"目前模型: {MODEL_ID}")
-    img_file = st.camera_input("請將牌排成一列拍攝")
     
-    if img_file and st.button("🚀 傳送辨識", type="primary"):
-        with st.spinner("☁️ AI 運算中..."):
-            result_list = call_roboflow_api(img_file)
-            if result_list:
-                st.success(f"成功辨識 {len(result_list)} 張")
-                st.write("結果：", " ".join(result_list))
-                
-                c1, c2 = st.columns(2)
-                if c1.button("📥 全部填入 (含胡)"):
-                    reset_game()
-                    if len(result_list) > 1:
-                        st.session_state.winning_tile = result_list[-1]
-                        st.session_state.hand_tiles = result_list[:-1]
+    # 1. 讓使用者選擇輸入方式
+    input_source = st.radio("輸入來源", ["📸 使用相機", "📂 上傳照片"], horizontal=True, label_visibility="collapsed")
+    
+    img_file = None
+    
+    # 2. 根據選擇顯示對應元件
+    if input_source == "📸 使用相機":
+        img_file = st.camera_input("請將牌排成一列拍攝")
+    else:
+        img_file = st.file_uploader("請上傳麻將照片 (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
+    
+    # 3. 執行辨識 (邏輯不變)
+    if img_file is not None:
+        if st.button("🚀 傳送辨識", type="primary"):
+            with st.spinner("☁️ AI 運算中..."):
+                try:
+                    result_list = call_roboflow_api(img_file)
+                    if result_list:
+                        st.success(f"成功辨識 {len(result_list)} 張")
+                        st.write("結果：", " ".join(result_list))
+                        
+                        col_auto1, col_auto2 = st.columns(2)
+                        if col_auto1.button("📥 全部填入 (含胡)"):
+                            reset_game()
+                            if len(result_list) > 1:
+                                st.session_state.winning_tile = result_list[-1]
+                                st.session_state.hand_tiles = result_list[:-1]
+                            else:
+                                st.session_state.hand_tiles = result_list
+                            st.rerun()
+                        if col_auto2.button("📥 僅填手牌"):
+                            reset_game()
+                            st.session_state.hand_tiles = result_list
+                            st.rerun()
                     else:
-                        st.session_state.hand_tiles = result_list
-                    st.rerun()
-                if c2.button("📥 僅填手牌"):
-                    reset_game()
-                    st.session_state.hand_tiles = result_list
-                    st.rerun()
-            else:
-                st.warning("⚠️ 未偵測到牌，請確認模型是否已部屬 (Deployed) 且照片清晰。")
+                        st.warning("⚠️ 未偵測到牌，請確認照片清晰且方向正確。")
+                except Exception as e:
+                    st.error(f"API 錯誤: {e}")
 
 # Dashboard
 with st.container(border=True):
