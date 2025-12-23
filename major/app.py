@@ -426,6 +426,93 @@ with st.container(border=True):
         st.write(f"🌸 花: {' '.join(st.session_state.flower_tiles)}")
 
 # === 區塊 B: 輸入模式切換 (關鍵) ===
+# ==========================================
+# [新增功能] 📸 AI 拍照辨識模組
+# ==========================================
+import base64
+from PIL import Image
+import io
+
+# 模擬的 AI 辨識結果 (當沒有 API Key 時使用)
+def mock_ai_recognition(image_bytes):
+    """
+    這裡模擬 AI 看到了什麼。
+    實際專案中，這裡會呼叫 OpenAI GPT-4o 或 YOLO 模型。
+    """
+    import time
+    time.sleep(1.5) # 模擬運算時間
+    # 假設 AI 辨識出一副聽牌
+    return {
+        "hand": ["1萬", "2萬", "3萬", "4筒", "5筒", "6筒", "7條", "8條", "9條", "東", "東", "發", "發"],
+        "exposed": [], # 假設沒拍到吃碰
+        "winning": "發" # 假設最後一張是發
+    }
+
+# 真實的 OpenAI GPT-4o 呼叫範本 (需填入 API Key)
+def call_gpt4o_vision(image_bytes):
+    # import openai
+    # client = openai.OpenAI(api_key="你的_OPENAI_API_KEY")
+    # base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    # response = client.chat.completions.create(
+    #     model="gpt-4o",
+    #     messages=[
+    #         {
+    #             "role": "user",
+    #             "content": [
+    #                 {"type": "text", "text": "Identify all mahjong tiles in this image. Return JSON format with keys: 'hand_tiles' (list of strings like '1萬', '2筒', '東'), 'exposed_tiles' (list of lists for pong/chow), and 'winning_tile' (string or null). Only return JSON."},
+    #                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+    #             ]
+    #         }
+    #     ],
+    #     response_format={"type": "json_object"}
+    # )
+    # return json.loads(response.choices[0].message.content)
+    return mock_ai_recognition(image_bytes) # 暫時用模擬的
+
+with st.expander("📸 AI 拍照自動填入 (Beta)", expanded=False):
+    st.info("💡 提示：請將牌排成一列，光線充足，避免反光。")
+    
+    # 啟動相機
+    img_file = st.camera_input("點擊拍照")
+    
+    if img_file is not None:
+        # 顯示預覽
+        # st.image(img_file, caption="已拍攝", width=300)
+        
+        if st.button("🚀 開始 AI 辨識", type="primary"):
+            with st.spinner("🤖 AI 正在看這張照片... (模擬中)"):
+                try:
+                    # 讀取圖片 bytes
+                    bytes_data = img_file.getvalue()
+                    
+                    # === 呼叫 AI 核心 ===
+                    result = mock_ai_recognition(bytes_data) 
+                    # 如果你有 API Key，改成: result = call_gpt4o_vision(bytes_data)
+                    # ===================
+
+                    # 解析結果並填入 Session State
+                    if result:
+                        # 1. 清空目前狀態
+                        reset_game()
+                        
+                        # 2. 填入手牌
+                        st.session_state.hand_tiles = result.get("hand", [])
+                        
+                        # 3. 填入明牌 (如果有的話)
+                        # 格式轉換: AI回傳的可能是單純 list，需轉成我們的 [{"type":"碰", "tiles":...}] 結構
+                        # 這裡暫時略過複雜轉換，假設 AI 很聰明直接回傳對的格式
+                        
+                        # 4. 填入胡牌
+                        st.session_state.winning_tile = result.get("winning")
+                        
+                        st.success("✅ 辨識成功！已自動填入。")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"辨識失敗：{e}")
+
+# ==========================================
+# [結束] AI 拍照模組
+# ==========================================
 st.write("---")
 mode_cols = st.columns(3)
 mode_options = ["手牌", "吃", "碰/槓"]
