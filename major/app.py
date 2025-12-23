@@ -109,7 +109,7 @@ def call_roboflow_api(image_file):
         "https://detect.roboflow.com/",
         MODEL_ID,
         "?api_key=", ROBOFLOW_API_KEY,
-        "&confidence=25&overlap=95&format=json"
+        "&confidence=50&overlap=95&format=json"
     ])
 
     try:
