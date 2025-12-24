@@ -4,7 +4,7 @@ import math
 import requests 
 
 # ==========================================
-# 1. 設定與 CSS 優化
+# 1. 設定與 CSS 優化 (完全復原)
 # ==========================================
 st.set_page_config(page_title="台灣麻將計算機 (AI版)", layout="centered", page_icon="🀄")
 
@@ -26,10 +26,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. API 設定
+# 2. API 設定 (修正模型版本為 v2)
 # ==========================================
+# 您的私有 API Key (來自您的截圖)
 ROBOFLOW_API_KEY = "dKsZfGd1QysNKSoaIT1m"
-MODEL_ID = "mahjong-baq4s-c3ovv/1"
+# 修正：將 /1 改為 /2 (因為您的截圖顯示目前是 v2 版本)
+MODEL_ID = "mahjong-baq4s-c3ovv/2"
 
 # ==========================================
 # 3. 初始化 Session State
@@ -53,11 +55,6 @@ for key, value in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-if 'is_dealer' not in st.session_state.settings:
-    st.session_state.settings['is_dealer'] = False
-if 'streak' not in st.session_state.settings:
-    st.session_state.settings['streak'] = 0
-
 # ==========================================
 # 4. 定義牌資料與對應表
 # ==========================================
@@ -69,7 +66,7 @@ TILES = {
     "花": ["春", "夏", "秋", "冬", "梅", "蘭", "竹", "菊"]
 }
 
-# 用於聽牌遍歷檢查
+# 用於聽牌檢查
 ALL_CHECK_TILES = TILES["萬"] + TILES["筒"] + TILES["條"] + TILES["字"]
 
 API_MAPPING = {
@@ -81,11 +78,11 @@ API_MAPPING = {
 }
 
 # ==========================================
-# 5. 邏輯輔助函式 (核心增強)
+# 5. 邏輯函式
 # ==========================================
 
 def get_tile_usage(tile):
-    """計算特定牌在全場(手牌、明牌區、胡牌)已使用的總張數"""
+    """計算特定牌在全場(手、明、胡)已使用的張數"""
     count = st.session_state.hand_tiles.count(tile)
     for item in st.session_state.exposed_tiles:
         count += item['tiles'].count(tile)
@@ -94,7 +91,7 @@ def get_tile_usage(tile):
     return count
 
 def get_logic_count():
-    """計算胡牌邏輯總張數 (槓牌顯示4張但邏輯佔3張)"""
+    """計算胡牌邏輯總張數 (槓牌視覺4張但邏輯佔3張)"""
     count = len(st.session_state.hand_tiles)
     count += len(st.session_state.exposed_tiles) * 3 
     if st.session_state.winning_tile: count += 1
@@ -156,7 +153,7 @@ def reset_game():
     st.session_state.input_mode = '手牌'
 
 # ==========================================
-# 6. 台數與聽牌計算邏輯
+# 6. 台數計算邏輯
 # ==========================================
 
 def try_remove_sets(counts):
@@ -230,7 +227,6 @@ def check_ping_hu(counts, flowers, exposed_list):
                 return True
     return False
 
-# --- 聽牌檢測 ---
 def check_hu_logic_for_ting(temp_counts):
     # 用於聽牌檢測的簡化版胡牌判斷
     if sum(temp_counts.values()) % 3 != 2: return False
@@ -364,7 +360,6 @@ def calculate_tai():
 
 st.title("🀄 台麻計算機 (AI版)")
 
-# --- AI 區塊 (加入參數調整) ---
 with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
     st.caption(f"目前模型: {MODEL_ID}")
     
@@ -413,16 +408,14 @@ with st.expander("📸 AI 拍照 / 📂 上傳辨識", expanded=False):
             st.session_state['ai_temp_result'] = []
             st.rerun()
 
-# --- 看板區 (聽牌提示 & 明牌刪除) ---
+# 看板
 ting_list = get_ting_list()
 with st.container(border=True):
     col_h1, col_h2 = st.columns([3, 1])
     col_h1.subheader("🖐️ 胡牌: " + (st.session_state.winning_tile if st.session_state.winning_tile else "?"))
     
-    # 聽牌提示
     if ting_list: col_h1.warning(f"📢 聽牌：{', '.join(ting_list)}")
     
-    # 明牌顯示
     if st.session_state.exposed_tiles:
         st.caption("🔽 明牌區 (點擊 ❌ 刪除)")
         for idx, item in enumerate(st.session_state.exposed_tiles):
@@ -435,9 +428,8 @@ with st.container(border=True):
     st.write(f"🎴 手牌 ({len(st.session_state.hand_tiles)}張): " + " ".join(sorted(st.session_state.hand_tiles)))
     if st.session_state.flower_tiles: st.write(f"🌸 花: {' '.join(st.session_state.flower_tiles)}")
 
-# --- 輸入區 (修正吃牌邏輯 & 按鈕消失問題) ---
+# 輸入區
 st.write("---")
-# 加入「槓」模式
 st.session_state.input_mode = st.radio("👇 輸入模式", ["手牌", "吃", "碰", "槓"], horizontal=True, label_visibility="collapsed")
 if st.session_state.input_mode == "吃": st.caption("💡 點擊「2萬」加入「234萬」")
 elif st.session_state.input_mode == "碰": st.caption("💡 點擊牌加入三張")
@@ -448,7 +440,6 @@ tabs = st.tabs(["🔴萬", "🔵筒", "🟢條", "⬛字", "🌸花"])
 def render_pad(tiles, cat):
     cols = st.columns(5)
     for idx, t in enumerate(tiles):
-        # 按鈕必須在判斷式外渲染
         if cols[idx % 5].button(t, key=f"btn_{t}"):
             cur_logic = get_logic_count()
             used = get_tile_usage(t)
@@ -458,20 +449,17 @@ def render_pad(tiles, cat):
                 if t not in st.session_state.flower_tiles:
                     st.session_state.flower_tiles.append(t); st.rerun()
             else:
-                # 嚴格牌數檢查
                 limit_reached = False
                 if mode == "手牌" and used >= 4: limit_reached = True
                 elif mode == "碰" and used > 1: limit_reached = True
                 elif mode == "槓" and used > 0: limit_reached = True
                 
-                # 吃牌檢查: 組合內所有牌都不可爆量
                 if mode == "吃":
                     try:
                         num = int(t[0]); suit = t[1:]
                         if num <= 7:
                             t1, t2, t3 = f"{num}{suit}", f"{num+1}{suit}", f"{num+2}{suit}"
-                            if get_tile_usage(t1)>=4 or get_tile_usage(t2)>=4 or get_tile_usage(t3)>=4:
-                                limit_reached = True
+                            if any(get_tile_usage(x) >= 4 for x in [t1, t2, t3]): limit_reached = True
                     except: pass
 
                 if limit_reached:
@@ -523,7 +511,7 @@ with st.expander("⚙️ 設定", expanded=True):
     st.session_state.settings['is_dealer'] = is_dealer
     
     if is_dealer:
-        st.session_state.settings['streak'] = st.number_input("連莊數 (n)", min_value=0, step=1, value=st.session_state.settings['streak'])
+        st.session_state.settings['streak'] = st.number_input("連莊數 (n)", min_value=0, step=1, value=st.session_state.settings['streak'], help="連n拉n，台數加倍")
     else:
         st.session_state.settings['streak'] = 0
         
@@ -536,4 +524,8 @@ if st.button("🧮 計算台數", type="primary"):
         st.error(f"❌ 牌數錯誤：目前 {get_logic_count()} 張 (應為 17)")
     else:
         score, lines = calculate_tai()
-        st.balloons(); st.success(f"### 總計：{score} 台"); [st.info(l) for l in lines]
+        if "❌" in lines[0]: st.error(lines[0])
+        else:
+            st.balloons()
+            st.success(f"### 總計：{score} 台")
+            for l in lines: st.info(l)
