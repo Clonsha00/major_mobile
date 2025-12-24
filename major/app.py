@@ -39,7 +39,7 @@ st.markdown("""
 # 2. API 設定
 # ==========================================
 ROBOFLOW_API_KEY = "dKsZfGd1QysNKSoaIT1m"
-MODEL_ID = "mahjong-baq4s-c3ovv/1"
+MODEL_ID = "mahjong-baq4s-c3ovv/2"
 
 # ==========================================
 # 3. 初始化 Session State
